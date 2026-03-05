@@ -31,6 +31,9 @@ internal/server/dist/*
 *.sublime-project
 *.sublime-workspace
 
+# Worktrees
+.worktrees/
+
 # OS
 .DS_Store
 Thumbs.db
