@@ -1,6 +1,7 @@
 import { ref, onUnmounted } from 'vue'
 import { useConnectionStore } from '../stores/connection'
 import { useLogsStore } from '../stores/logs'
+import { useLabelsStore } from '../stores/labels'
 import type { WSMessage, ClientJoinedData, LogBulkData, StatusData } from '../types'
 
 export function useWebSocket(url: string) {
@@ -12,6 +13,7 @@ export function useWebSocket(url: string) {
 
   const connectionStore = useConnectionStore()
   const logsStore = useLogsStore()
+  const labelsStore = useLabelsStore()
 
   function connect() {
     if (ws) {
@@ -106,7 +108,12 @@ export function useWebSocket(url: string) {
     connectionStore.setFollowing(true)
   }
 
+  function setLabelFilter(labels: Record<string, string>) {
+    send({ type: 'set_filter', data: { labels } })
+  }
+
   connectionStore.registerControls(pause, resume)
+  labelsStore.registerSendFilter(setLabelFilter)
 
   onUnmounted(() => {
     disconnect()
@@ -118,6 +125,7 @@ export function useWebSocket(url: string) {
     send,
     pause,
     resume,
+    setLabelFilter,
     isConnected,
   }
 }

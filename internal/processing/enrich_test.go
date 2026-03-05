@@ -11,7 +11,7 @@ import (
 
 func TestEnrichWorker_AssignsUUID(t *testing.T) {
 	msg := models.LogMessage{Content: "hello"}
-	out, err := enrichWorker(context.Background(), msg)
+	out, err := EnrichWorker(context.Background(), msg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -26,8 +26,8 @@ func TestEnrichWorker_AssignsUUID(t *testing.T) {
 
 func TestEnrichWorker_UniqueUUIDs(t *testing.T) {
 	msg := models.LogMessage{Content: "hello"}
-	out1, _ := enrichWorker(context.Background(), msg)
-	out2, _ := enrichWorker(context.Background(), msg)
+	out1, _ := EnrichWorker(context.Background(), msg)
+	out2, _ := EnrichWorker(context.Background(), msg)
 	if out1.ID == out2.ID {
 		t.Error("expected different UUIDs for different calls")
 	}
@@ -36,7 +36,7 @@ func TestEnrichWorker_UniqueUUIDs(t *testing.T) {
 func TestEnrichWorker_FillsZeroTimestamp(t *testing.T) {
 	msg := models.LogMessage{Content: "hello"}
 	before := time.Now()
-	out, err := enrichWorker(context.Background(), msg)
+	out, err := EnrichWorker(context.Background(), msg)
 	after := time.Now()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -49,7 +49,7 @@ func TestEnrichWorker_FillsZeroTimestamp(t *testing.T) {
 func TestEnrichWorker_PreservesExistingTimestamp(t *testing.T) {
 	ts := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	msg := models.LogMessage{Content: "hello", Timestamp: ts}
-	out, err := enrichWorker(context.Background(), msg)
+	out, err := EnrichWorker(context.Background(), msg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

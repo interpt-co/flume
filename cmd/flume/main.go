@@ -9,10 +9,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/paulofilip3/pipeline"
 	"github.com/spf13/cobra"
 
 	"github.com/interpt-co/flume/internal/app"
 	"github.com/interpt-co/flume/internal/config"
+	"github.com/interpt-co/flume/internal/models"
 	"github.com/interpt-co/flume/internal/source"
 )
 
@@ -32,11 +34,11 @@ var stdinCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		application, err := app.New(cfg, src)
+		ch, err := src.Start(ctx)
 		if err != nil {
 			return err
 		}
-		return application.Run(ctx)
+		return app.New(cfg).Run(ctx, ch)
 	},
 }
 
@@ -54,11 +56,11 @@ var followCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		application, err := app.New(cfg, src)
+		ch, err := src.Start(ctx)
 		if err != nil {
 			return err
 		}
-		return application.Run(ctx)
+		return app.New(cfg).Run(ctx, ch)
 	},
 }
 
@@ -76,11 +78,11 @@ var socketCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		application, err := app.New(cfg, src)
+		ch, err := src.Start(ctx)
 		if err != nil {
 			return err
 		}
-		return application.Run(ctx)
+		return app.New(cfg).Run(ctx, ch)
 	},
 }
 
@@ -98,11 +100,11 @@ var forwardCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		application, err := app.New(cfg, src)
+		ch, err := src.Start(ctx)
 		if err != nil {
 			return err
 		}
-		return application.Run(ctx)
+		return app.New(cfg).Run(ctx, ch)
 	},
 }
 
@@ -120,11 +122,74 @@ var demoCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		application, err := app.New(cfg, src)
+		ch, err := src.Start(ctx)
 		if err != nil {
 			return err
 		}
-		return application.Run(ctx)
+		return app.New(cfg).Run(ctx, ch)
+	},
+}
+
+var aggregateCmd = &cobra.Command{
+	Use:   "aggregate",
+	Short: "Run multiple log sources simultaneously",
+	Long:  "Aggregate logs from multiple sources (forward, socket, file, demo) into a single stream.",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg := configFromFlags(cmd)
+
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+
+		var channels []<-chan models.LogMessage
+
+		forwardAddrs, _ := cmd.Flags().GetStringSlice("forward")
+		for _, addr := range forwardAddrs {
+			ch, err := source.NewForwardSource(addr).Start(ctx)
+			if err != nil {
+				cancel()
+				return fmt.Errorf("forward source %s: %w", addr, err)
+			}
+			channels = append(channels, ch)
+		}
+
+		socketAddrs, _ := cmd.Flags().GetStringSlice("socket")
+		for _, addr := range socketAddrs {
+			ch, err := source.NewSocketSource(addr).Start(ctx)
+			if err != nil {
+				cancel()
+				return fmt.Errorf("socket source %s: %w", addr, err)
+			}
+			channels = append(channels, ch)
+		}
+
+		files, _ := cmd.Flags().GetStringSlice("file")
+		if len(files) > 0 {
+			ch, err := source.NewFileSource(files).Start(ctx)
+			if err != nil {
+				cancel()
+				return fmt.Errorf("file source: %w", err)
+			}
+			channels = append(channels, ch)
+		}
+
+		useDemo, _ := cmd.Flags().GetBool("demo")
+		if useDemo {
+			rate := getIntFlag(cmd, "rate", "FLUME_DEMO_RATE", cfg.DemoRate)
+			cfg.DemoRate = rate
+			ch, err := source.NewDemoSource(rate).Start(ctx)
+			if err != nil {
+				cancel()
+				return fmt.Errorf("demo source: %w", err)
+			}
+			channels = append(channels, ch)
+		}
+
+		if len(channels) == 0 {
+			return fmt.Errorf("at least one source is required (use --forward, --socket, --file, or --demo)")
+		}
+
+		merged := pipeline.Merge(ctx, channels...)
+		return app.New(cfg).Run(ctx, merged)
 	},
 }
 
@@ -143,6 +208,8 @@ func init() {
 	rootCmd.PersistentFlags().String("s3-endpoint", "", "Custom S3 endpoint (MinIO, localstack)")
 	rootCmd.PersistentFlags().String("s3-flush-interval", "10s", "S3 flush interval")
 	rootCmd.PersistentFlags().Int("s3-flush-count", 1000, "S3 flush message count threshold")
+	rootCmd.PersistentFlags().String("s3-partition-label", "", "Partition S3 keys by this label")
+	rootCmd.PersistentFlags().String("s3-retention", "0", "S3 data retention period (e.g. 72h, 7d). 0 = disabled")
 
 	// follow command flags.
 	followCmd.Flags().StringSlice("file", nil, "File paths to follow (can be repeated)")
@@ -157,7 +224,14 @@ func init() {
 	// demo command flags.
 	demoCmd.Flags().Int("rate", 10, "Messages per second")
 
-	rootCmd.AddCommand(stdinCmd, followCmd, socketCmd, forwardCmd, demoCmd)
+	// aggregate command flags.
+	aggregateCmd.Flags().StringSlice("forward", nil, "Forward protocol addresses (can be repeated)")
+	aggregateCmd.Flags().StringSlice("socket", nil, "TCP socket addresses (can be repeated)")
+	aggregateCmd.Flags().StringSlice("file", nil, "File paths to follow (can be repeated)")
+	aggregateCmd.Flags().Bool("demo", false, "Include demo log generator")
+	aggregateCmd.Flags().Int("rate", 10, "Demo messages per second (used with --demo)")
+
+	rootCmd.AddCommand(stdinCmd, followCmd, socketCmd, forwardCmd, demoCmd, aggregateCmd)
 }
 
 // configFromFlags builds a Config from cobra command flags with env var fallback.
@@ -177,6 +251,8 @@ func configFromFlags(cmd *cobra.Command) config.Config {
 	cfg.S3Endpoint = getStringFlag(cmd, "s3-endpoint", "FLUME_S3_ENDPOINT", cfg.S3Endpoint)
 	cfg.S3FlushInterval = getDurationFlag(cmd, "s3-flush-interval", "FLUME_S3_FLUSH_INTERVAL", cfg.S3FlushInterval)
 	cfg.S3FlushCount = getIntFlag(cmd, "s3-flush-count", "FLUME_S3_FLUSH_COUNT", cfg.S3FlushCount)
+	cfg.S3PartitionLabel = getStringFlag(cmd, "s3-partition-label", "FLUME_S3_PARTITION_LABEL", cfg.S3PartitionLabel)
+	cfg.S3Retention = getDurationFlag(cmd, "s3-retention", "FLUME_S3_RETENTION", cfg.S3Retention)
 
 	return cfg
 }

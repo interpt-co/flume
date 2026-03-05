@@ -42,6 +42,7 @@ func NewServer(host string, port int, manager *ClientManager, opts ...ServerOpti
 	mux.HandleFunc("GET /ws", manager.HandleWS)
 	mux.HandleFunc("GET /api/status", manager.HandleStatus)
 	mux.HandleFunc("GET /api/client/load", manager.HandleLoadRange)
+	mux.HandleFunc("GET /api/labels", manager.HandleLabels)
 
 	if so.storage != nil {
 		h := &HistoryHandler{storage: so.storage}

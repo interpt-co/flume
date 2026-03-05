@@ -85,8 +85,9 @@ func (m *ClientManager) removeClient(id string) {
 	}
 }
 
-// ConsumeLoop reads messages from the pipeline output channel, pushes each
-// message to the ring buffer, and distributes it to all connected clients.
+// ConsumeLoop reads messages from the pipeline output channel and distributes
+// them to all connected clients. The ring buffer is populated by a pipeline
+// stage, so ConsumeLoop only handles broadcasting.
 // It blocks until ctx is cancelled or the messages channel is closed.
 func (m *ClientManager) ConsumeLoop(ctx context.Context, messages <-chan models.LogMessage) {
 	for {
@@ -97,7 +98,6 @@ func (m *ClientManager) ConsumeLoop(ctx context.Context, messages <-chan models.
 			if !ok {
 				return
 			}
-			m.ring.Push(msg)
 			atomic.AddUint64(&m.msgCount, 1)
 
 			m.mu.RLock()

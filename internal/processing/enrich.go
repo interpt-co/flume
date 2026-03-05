@@ -13,7 +13,7 @@ import (
 
 // enrichWorker assigns an ID, fills in a missing timestamp, and extracts the
 // log level from the message content.
-func enrichWorker(_ context.Context, msg models.LogMessage) (models.LogMessage, error) {
+func EnrichWorker(_ context.Context, msg models.LogMessage) (models.LogMessage, error) {
 	msg.ID = uuid.NewString()
 	if msg.Timestamp.IsZero() {
 		msg.Timestamp = time.Now()

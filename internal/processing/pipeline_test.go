@@ -6,13 +6,23 @@ import (
 	"time"
 
 	"github.com/interpt-co/flume/internal/models"
+	"github.com/paulofilip3/pipeline"
 )
 
-func TestNewPipeline_Integration(t *testing.T) {
-	p, err := NewPipeline()
+func newTestPipeline(t *testing.T) *pipeline.Pipeline[models.LogMessage] {
+	t.Helper()
+	p, err := pipeline.New(
+		pipeline.Stage[models.LogMessage]{Name: "parse", Worker: ParseWorker, Concurrency: 1},
+		pipeline.Stage[models.LogMessage]{Name: "enrich", Worker: EnrichWorker, Concurrency: 1},
+	)
 	if err != nil {
-		t.Fatalf("NewPipeline() error: %v", err)
+		t.Fatalf("pipeline.New() error: %v", err)
 	}
+	return p
+}
+
+func TestPipeline_Integration(t *testing.T) {
+	p := newTestPipeline(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -29,7 +39,6 @@ func TestNewPipeline_Integration(t *testing.T) {
 	for msg := range out {
 		results = append(results, msg)
 	}
-	// Drain errors.
 	for err := range errs {
 		t.Errorf("unexpected pipeline error: %v", err)
 	}
@@ -38,7 +47,6 @@ func TestNewPipeline_Integration(t *testing.T) {
 		t.Fatalf("expected 3 results, got %d", len(results))
 	}
 
-	// First message: JSON with level "error".
 	r0 := results[0]
 	if !r0.IsJson {
 		t.Error("result[0]: expected IsJson=true")
@@ -53,7 +61,6 @@ func TestNewPipeline_Integration(t *testing.T) {
 		t.Error("result[0]: expected non-zero Timestamp")
 	}
 
-	// Second message: plain text, no level.
 	r1 := results[1]
 	if r1.IsJson {
 		t.Error("result[1]: expected IsJson=false")
@@ -65,7 +72,6 @@ func TestNewPipeline_Integration(t *testing.T) {
 		t.Error("result[1]: expected non-empty ID")
 	}
 
-	// Third message: bracket level.
 	r2 := results[2]
 	if r2.IsJson {
 		t.Error("result[2]: expected IsJson=false")
@@ -75,11 +81,8 @@ func TestNewPipeline_Integration(t *testing.T) {
 	}
 }
 
-func TestNewPipeline_EmptyInput(t *testing.T) {
-	p, err := NewPipeline()
-	if err != nil {
-		t.Fatalf("NewPipeline() error: %v", err)
-	}
+func TestPipeline_EmptyInput(t *testing.T) {
+	p := newTestPipeline(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -102,11 +105,8 @@ func TestNewPipeline_EmptyInput(t *testing.T) {
 	}
 }
 
-func TestNewPipeline_PreservesOrder(t *testing.T) {
-	p, err := NewPipeline()
-	if err != nil {
-		t.Fatalf("NewPipeline() error: %v", err)
-	}
+func TestPipeline_PreservesOrder(t *testing.T) {
+	p := newTestPipeline(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

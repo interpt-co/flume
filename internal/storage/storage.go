@@ -18,6 +18,7 @@ type Storage interface {
 	Start(ctx context.Context) error
 
 	// ReadBefore returns up to `count` messages with timestamps before `before`,
-	// ordered newest-first (reverse chronological).
-	ReadBefore(ctx context.Context, before time.Time, count int) ([]models.LogMessage, error)
+	// ordered newest-first (reverse chronological). If filter is non-nil, only
+	// messages matching all filter labels are returned.
+	ReadBefore(ctx context.Context, before time.Time, count int, filter map[string]string) ([]models.LogMessage, error)
 }

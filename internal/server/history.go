@@ -4,16 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
 	"github.com/interpt-co/flume/internal/models"
+	"github.com/interpt-co/flume/internal/query"
 )
 
 // Storage is the interface required by the history handler. It mirrors the
 // ReadBefore method from internal/storage.Storage to avoid a circular import.
 type Storage interface {
-	ReadBefore(ctx context.Context, before time.Time, count int) ([]models.LogMessage, error)
+	ReadBefore(ctx context.Context, before time.Time, count int, filter map[string]string) ([]models.LogMessage, error)
 }
 
 // HistoryHandler serves the /api/history endpoint backed by persistent storage.
@@ -29,11 +31,12 @@ type historyResponse struct {
 
 // HandleHistory returns historical log messages from persistent storage.
 //
-//	GET /api/history?before={ISO_timestamp}&count=500
+//	GET /api/history?before={ISO_timestamp}&count=500&labels=key:val,key:val
 //
 // Parameters:
 //   - before: RFC3339 timestamp (default: now)
 //   - count:  number of messages to return (default 500, max 1000)
+//   - labels: comma-separated key:value label filter
 func (h *HistoryHandler) HandleHistory(w http.ResponseWriter, r *http.Request) {
 	// Parse "before" parameter.
 	beforeStr := r.URL.Query().Get("before")
@@ -64,7 +67,10 @@ func (h *HistoryHandler) HandleHistory(w http.ResponseWriter, r *http.Request) {
 		count = 1000
 	}
 
-	msgs, err := h.storage.ReadBefore(r.Context(), before, count)
+	// Parse "labels" filter.
+	filter := query.ParseLabels(r.URL.Query().Get("labels"))
+
+	msgs, err := h.storage.ReadBefore(r.Context(), before, count, map[string]string(filter))
 	if err != nil {
 		http.Error(w, `{"error":"failed to read history"}`, http.StatusInternalServerError)
 		return
@@ -77,4 +83,40 @@ func (h *HistoryHandler) HandleHistory(w http.ResponseWriter, r *http.Request) {
 		Messages: msgs,
 		HasMore:  hasMore,
 	})
+}
+
+// HandleLabels returns distinct label keys and their values from the ring buffer.
+func (m *ClientManager) HandleLabels(w http.ResponseWriter, r *http.Request) {
+	msgs := m.ring.GetAll()
+	labels := make(map[string]map[string]bool)
+
+	for _, msg := range msgs {
+		// Include level as a virtual label.
+		if msg.Level != "" {
+			if labels["level"] == nil {
+				labels["level"] = make(map[string]bool)
+			}
+			labels["level"][msg.Level] = true
+		}
+		for k, v := range msg.Labels {
+			if labels[k] == nil {
+				labels[k] = make(map[string]bool)
+			}
+			labels[k][v] = true
+		}
+	}
+
+	// Convert sets to sorted slices.
+	result := make(map[string][]string, len(labels))
+	for k, vals := range labels {
+		list := make([]string, 0, len(vals))
+		for v := range vals {
+			list = append(list, v)
+		}
+		sort.Strings(list)
+		result[k] = list
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }

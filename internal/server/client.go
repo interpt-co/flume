@@ -7,6 +7,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/interpt-co/flume/internal/models"
+	"github.com/interpt-co/flume/internal/query"
 )
 
 const (
@@ -51,6 +52,11 @@ type setStatusData struct {
 	Status string `json:"status"`
 }
 
+// setFilterData is received from the client to set label filters.
+type setFilterData struct {
+	Labels map[string]string `json:"labels"`
+}
+
 // loadRangeData is received from the client to request buffered messages.
 type loadRangeData struct {
 	Start int `json:"start"`
@@ -59,13 +65,14 @@ type loadRangeData struct {
 
 // Client represents a single connected WebSocket client.
 type Client struct {
-	id      string
-	conn    *websocket.Conn
-	manager *ClientManager
-	send    chan models.LogMessage
-	status  string
-	mu      sync.Mutex // guards status
-	writeMu sync.Mutex // guards WebSocket writes
+	id          string
+	conn        *websocket.Conn
+	manager     *ClientManager
+	send        chan models.LogMessage
+	status      string
+	labelFilter map[string]string // nil = match all
+	mu          sync.Mutex        // guards status and labelFilter
+	writeMu     sync.Mutex        // guards WebSocket writes
 }
 
 func newClient(id string, conn *websocket.Conn, manager *ClientManager) *Client {
@@ -79,13 +86,18 @@ func newClient(id string, conn *websocket.Conn, manager *ClientManager) *Client 
 }
 
 // Send enqueues a message for delivery. Non-blocking: drops the message
-// if the client's send buffer is full.
+// if the client's send buffer is full. Applies label filter if set.
 func (c *Client) Send(msg models.LogMessage) {
 	c.mu.Lock()
 	st := c.status
+	filter := c.labelFilter
 	c.mu.Unlock()
 
 	if st == StatusStopped {
+		return
+	}
+
+	if len(filter) > 0 && !query.LabelMatcher(filter).Matches(msg) {
 		return
 	}
 
@@ -141,6 +153,19 @@ func (c *Client) readPump() {
 			}
 			messages := c.manager.ring.GetRange(data.Start, data.Count)
 			c.writeLogBulk(messages)
+
+		case "set_filter":
+			var data setFilterData
+			if err := json.Unmarshal(msg.Data, &data); err != nil {
+				continue
+			}
+			c.mu.Lock()
+			if len(data.Labels) == 0 {
+				c.labelFilter = nil
+			} else {
+				c.labelFilter = data.Labels
+			}
+			c.mu.Unlock()
 
 		case "ping":
 			c.writeJSON(wsMessage{Type: "pong"})

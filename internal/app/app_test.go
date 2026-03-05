@@ -12,30 +12,7 @@ import (
 	"github.com/interpt-co/flume/internal/config"
 	"github.com/interpt-co/flume/internal/models"
 	"github.com/interpt-co/flume/internal/server"
-	"github.com/interpt-co/flume/internal/source"
 )
-
-// mockSource is a channel-based source for testing.
-type mockSource struct {
-	ch   chan models.LogMessage
-	name string
-}
-
-func newMockSource() *mockSource {
-	return &mockSource{
-		ch:   make(chan models.LogMessage, 10),
-		name: "mock",
-	}
-}
-
-func (m *mockSource) Name() string { return m.name }
-
-func (m *mockSource) Start(_ context.Context) (<-chan models.LogMessage, error) {
-	return m.ch, nil
-}
-
-// Verify mockSource implements source.Source.
-var _ source.Source = (*mockSource)(nil)
 
 // getFreePort asks the OS for an available port.
 func getFreePort(t *testing.T) int {
@@ -60,12 +37,7 @@ func TestAppRunAndMessageFlow(t *testing.T) {
 		Verbose:      false,
 	}
 
-	mock := newMockSource()
-
-	application, err := New(cfg, mock)
-	if err != nil {
-		t.Fatalf("failed to create app: %v", err)
-	}
+	input := make(chan models.LogMessage, 10)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -73,7 +45,7 @@ func TestAppRunAndMessageFlow(t *testing.T) {
 	// Run the app in a goroutine.
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- application.Run(ctx)
+		errCh <- New(cfg).Run(ctx, input)
 	}()
 
 	// Wait for the server to be ready.
@@ -94,11 +66,11 @@ func TestAppRunAndMessageFlow(t *testing.T) {
 		t.Fatal("server did not become ready in time")
 	}
 
-	// Send a message through the mock source.
-	mock.ch <- models.LogMessage{
+	// Send a message through the input channel.
+	input <- models.LogMessage{
 		Content:   "hello from test",
 		Source:    models.SourceStdin,
-		Origin:    models.Origin{Name: "mock"},
+		Origin:    models.Origin{Name: "test"},
 		Timestamp: time.Now(),
 	}
 
