@@ -1,0 +1,51 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: var(--flume-bg);
+  color: var(--flume-fg);
+  font-family: var(--flume-font-family);
+}
+
+/* Custom scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--flume-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--flume-border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--flume-fg-secondary);
+}
+
+/* Selection color */
+::selection {
+  background-color: var(--flume-accent);
+  color: white;
+}
+
+/* Theme transition on key elements */
+body,
+.flume-app,
+.flume-header,
+.search-bar,
+.status-bar,
+.log-detail,
+.column-config__dropdown {
+  transition: background-color 0.2s, color 0.2s, border-color 0.2s;
+}

@@ -1,0 +1,81 @@
+:root,
+[data-theme="light"] {
+  --flume-bg: #ffffff;
+  --flume-bg-secondary: #f5f5f5;
+  --flume-fg: #1a1a1a;
+  --flume-fg-secondary: #666666;
+  --flume-accent: #2563eb;
+  --flume-border: #e5e5e5;
+  --flume-font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --flume-font-size: 13px;
+  --flume-row-height: 24px;
+  --flume-level-debug: #6b7280;
+  --flume-level-info: #2563eb;
+  --flume-level-warn: #d97706;
+  --flume-level-error: #dc2626;
+  --flume-level-fatal: #7c2d12;
+  --flume-bg-hover: #ebebeb;
+  --flume-bg-active: #e0e7ff;
+  --flume-shadow: rgba(0, 0, 0, 0.08);
+  --flume-text-accent: #1d4ed8;
+}
+
+[data-theme="dark"] {
+  --flume-bg: #0f0f0f;
+  --flume-bg-secondary: #1a1a1a;
+  --flume-fg: #e5e5e5;
+  --flume-fg-secondary: #999999;
+  --flume-accent: #3b82f6;
+  --flume-border: #333333;
+  --flume-level-debug: #9ca3af;
+  --flume-level-info: #60a5fa;
+  --flume-level-warn: #fbbf24;
+  --flume-level-error: #f87171;
+  --flume-level-fatal: #fb923c;
+  --flume-bg-hover: #252525;
+  --flume-bg-active: #1e293b;
+  --flume-shadow: rgba(0, 0, 0, 0.3);
+  --flume-text-accent: #93c5fd;
+}
+
+[data-theme="catppuccin-latte"] {
+  --flume-bg: #eff1f5;
+  --flume-bg-secondary: #e6e9ef;
+  --flume-fg: #4c4f69;
+  --flume-fg-secondary: #6c6f85;
+  --flume-accent: #1e66f5;
+  --flume-border: #ccd0da;
+  --flume-font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --flume-font-size: 13px;
+  --flume-row-height: 24px;
+  --flume-level-debug: #9ca0b0;
+  --flume-level-info: #1e66f5;
+  --flume-level-warn: #df8e1d;
+  --flume-level-error: #d20f39;
+  --flume-level-fatal: #fe640b;
+  --flume-bg-hover: #ccd0da;
+  --flume-bg-active: #bcc0cc;
+  --flume-shadow: rgba(76, 79, 105, 0.1);
+  --flume-text-accent: #7287fd;
+}
+
+[data-theme="catppuccin-mocha"] {
+  --flume-bg: #1e1e2e;
+  --flume-bg-secondary: #181825;
+  --flume-fg: #cdd6f4;
+  --flume-fg-secondary: #a6adc8;
+  --flume-accent: #89b4fa;
+  --flume-border: #313244;
+  --flume-font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --flume-font-size: 13px;
+  --flume-row-height: 24px;
+  --flume-level-debug: #6c7086;
+  --flume-level-info: #89b4fa;
+  --flume-level-warn: #f9e2af;
+  --flume-level-error: #f38ba8;
+  --flume-level-fatal: #fab387;
+  --flume-bg-hover: #313244;
+  --flume-bg-active: #45475a;
+  --flume-shadow: rgba(0, 0, 0, 0.4);
+  --flume-text-accent: #b4befe;
+}

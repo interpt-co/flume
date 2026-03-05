@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "flume.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "flume.labels" . | nindent 4 }}
+data:
+  FLUME_PORT: {{ .Values.service.httpPort | quote }}
+  FLUME_MAX_MESSAGES: {{ .Values.flume.maxMessages | quote }}
+  FLUME_BULK_WINDOW_MS: {{ .Values.flume.bulkWindowMs | quote }}
+  FLUME_VERBOSE: {{ .Values.flume.verbose | quote }}
+  FLUME_S3_BUCKET: {{ .Values.flume.s3.bucket | quote }}
+  FLUME_S3_PREFIX: {{ .Values.flume.s3.prefix | quote }}
+  FLUME_S3_REGION: {{ .Values.flume.s3.region | quote }}
+  FLUME_S3_ENDPOINT: {{ .Values.flume.s3.endpoint | quote }}
+  FLUME_S3_FLUSH_INTERVAL: {{ .Values.flume.s3.flushInterval | quote }}
+  FLUME_S3_FLUSH_COUNT: {{ .Values.flume.s3.flushCount | quote }}

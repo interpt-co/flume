@@ -1,0 +1,36 @@
+# Go
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# Web / Node
+web/node_modules/
+web/dist/
+web/dist-wc/
+
+# Embedded frontend (build artifact copied from web/dist)
+internal/server/dist/*
+!internal/server/dist/index.html
+
+# Environment
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db

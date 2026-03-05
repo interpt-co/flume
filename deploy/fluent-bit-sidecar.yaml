@@ -1,0 +1,137 @@
+# Fluent Bit sidecar configuration for flume
+#
+# This file is a reference snippet showing how to add a Fluent Bit sidecar to
+# an existing Kubernetes Deployment so that its container logs are forwarded to
+# an flume instance running in the same namespace.
+#
+# Usage:
+#   1. Copy the `fluent-bit-config` ConfigMap into your application namespace.
+#   2. Add the `fluent-bit` container entry to your Deployment's pod spec.
+#   3. Replace <FLUME_SERVICE_HOST> and <FLUME_SERVICE_PORT> with the
+#      actual service name and port of your flume release, e.g.:
+#        Host   flume.my-namespace.svc.cluster.local
+#        Port   24224
+#
+# The sidecar reads log files written by the main container via a shared
+# emptyDir volume. Mount the volume at the path where your container writes
+# logs (or adjust the `Path` in the [INPUT] section to match /var/log/containers
+# for host-level log collection via a DaemonSet instead).
+
+---
+# ConfigMap holding the Fluent Bit pipeline configuration.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluent-bit-config
+  # Replace with the namespace where your application is deployed.
+  namespace: my-namespace
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush        1
+        Daemon       Off
+        Log_Level    warn
+        Parsers_File parsers.conf
+
+    [INPUT]
+        Name              tail
+        Tag               app.*
+        # Path to the log files produced by the main container.
+        # Adjust this path to match your application's log output location.
+        Path              /var/log/app/*.log
+        # Alternatively, to tail container stdout/stderr rotated by the kubelet:
+        # Path           /var/log/containers/<pod-name>_<namespace>_<container>-*.log
+        Parser            json
+        DB                /var/log/fluentbit/tail.db
+        DB.locking        true
+        Mem_Buf_Limit     10MB
+        Skip_Long_Lines   On
+        Refresh_Interval  5
+
+    [OUTPUT]
+        Name          forward
+        Match         *
+        # Replace with the flume service address in your cluster.
+        Host          flume.my-namespace.svc.cluster.local
+        Port          24224
+        # Optional: tag to include with every forwarded record.
+        Tag           app
+
+  parsers.conf: |
+    [PARSER]
+        Name        json
+        Format      json
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%LZ
+
+---
+# Example Deployment showing where to add the sidecar and shared log volume.
+# This is illustrative — merge the relevant sections into your own Deployment.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-application
+  namespace: my-namespace
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: my-application
+  template:
+    metadata:
+      labels:
+        app: my-application
+    spec:
+      containers:
+        # -----------------------------------------------------------------
+        # Main application container
+        # -----------------------------------------------------------------
+        - name: app
+          image: my-app:latest
+          # Write logs to a shared volume so the sidecar can tail them.
+          # Alternatively, configure your app to write to stdout/stderr and
+          # adjust the Fluent Bit INPUT path accordingly.
+          volumeMounts:
+            - name: app-logs
+              mountPath: /var/log/app
+
+        # -----------------------------------------------------------------
+        # Fluent Bit sidecar — add this block to your existing Deployment
+        # -----------------------------------------------------------------
+        - name: fluent-bit
+          image: fluent/fluent-bit:3.3
+          resources:
+            limits:
+              cpu: 100m
+              memory: 64Mi
+            requests:
+              cpu: 50m
+              memory: 32Mi
+          volumeMounts:
+            # Shared log directory written by the main container.
+            - name: app-logs
+              mountPath: /var/log/app
+              readOnly: true
+            # Fluent Bit tail state DB — prevents re-reading after restarts.
+            - name: fluent-bit-db
+              mountPath: /var/log/fluentbit
+            # Fluent Bit configuration from the ConfigMap above.
+            - name: fluent-bit-config
+              mountPath: /fluent-bit/etc/fluent-bit.conf
+              subPath: fluent-bit.conf
+            - name: fluent-bit-config
+              mountPath: /fluent-bit/etc/parsers.conf
+              subPath: parsers.conf
+
+      volumes:
+        # Shared between the app container and Fluent Bit.
+        - name: app-logs
+          emptyDir: {}
+        # Fluent Bit tail state database — survives sidecar restarts within
+        # the same pod lifetime.
+        - name: fluent-bit-db
+          emptyDir: {}
+        # ConfigMap defined above.
+        - name: fluent-bit-config
+          configMap:
+            name: fluent-bit-config

@@ -1,0 +1,339 @@
+package storage
+
+import (
+	"bytes"
+	"compress/gzip"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	log "github.com/sirupsen/logrus"
+
+	"github.com/interpt-co/flume/internal/models"
+)
+
+// S3Client abstracts the S3 operations we need, making the storage testable.
+type S3Client interface {
+	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+}
+
+// S3Config holds configuration for the S3 storage backend.
+type S3Config struct {
+	Bucket        string        // S3 bucket name
+	Prefix        string        // Key prefix (typically namespace name)
+	Region        string        // AWS region
+	Endpoint      string        // Custom endpoint (MinIO, localstack)
+	FlushInterval time.Duration // Default 10s
+	FlushCount    int           // Default 1000
+}
+
+// S3Storage implements Storage backed by S3-compatible object storage.
+type S3Storage struct {
+	client S3Client
+	cfg    S3Config
+	ch     chan models.LogMessage
+	mu     sync.Mutex
+	buf    []models.LogMessage
+}
+
+// NewS3Storage creates a new S3Storage from the given config. It initialises
+// the AWS SDK client. If cfg.Endpoint is non-empty it is used as a custom
+// endpoint (for MinIO / localstack).
+func NewS3Storage(ctx context.Context, cfg S3Config) (*S3Storage, error) {
+	if cfg.FlushInterval == 0 {
+		cfg.FlushInterval = 10 * time.Second
+	}
+	if cfg.FlushCount == 0 {
+		cfg.FlushCount = 1000
+	}
+
+	var opts []func(*awsconfig.LoadOptions) error
+	if cfg.Region != "" {
+		opts = append(opts, awsconfig.WithRegion(cfg.Region))
+	}
+
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("loading AWS config: %w", err)
+	}
+
+	var s3Opts []func(*s3.Options)
+	if cfg.Endpoint != "" {
+		s3Opts = append(s3Opts, func(o *s3.Options) {
+			o.BaseEndpoint = aws.String(cfg.Endpoint)
+			o.UsePathStyle = true
+		})
+	}
+
+	client := s3.NewFromConfig(awsCfg, s3Opts...)
+
+	return NewS3StorageWithClient(client, cfg), nil
+}
+
+// NewS3StorageWithClient creates an S3Storage using an already-constructed S3
+// client. This is useful for testing with a mock client.
+func NewS3StorageWithClient(client S3Client, cfg S3Config) *S3Storage {
+	if cfg.FlushInterval == 0 {
+		cfg.FlushInterval = 10 * time.Second
+	}
+	if cfg.FlushCount == 0 {
+		cfg.FlushCount = 1000
+	}
+	return &S3Storage{
+		client: client,
+		cfg:    cfg,
+		ch:     make(chan models.LogMessage, cfg.FlushCount),
+	}
+}
+
+// Writer returns the write channel for ingesting messages.
+func (s *S3Storage) Writer() chan<- models.LogMessage {
+	return s.ch
+}
+
+// Start runs the background flush loop. It blocks until ctx is cancelled,
+// then flushes any remaining buffered messages.
+func (s *S3Storage) Start(ctx context.Context) error {
+	ticker := time.NewTicker(s.cfg.FlushInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case msg, ok := <-s.ch:
+			if !ok {
+				// Channel closed — flush remaining.
+				return s.flush(context.Background())
+			}
+			s.mu.Lock()
+			s.buf = append(s.buf, msg)
+			full := len(s.buf) >= s.cfg.FlushCount
+			s.mu.Unlock()
+
+			if full {
+				if err := s.flush(ctx); err != nil {
+					// Log but keep going; best-effort persistence.
+					log.WithError(err).Warn("storage: flush error")
+				}
+			}
+
+		case <-ticker.C:
+			if err := s.flush(ctx); err != nil {
+				log.WithError(err).Warn("storage: flush error")
+			}
+
+		case <-ctx.Done():
+			// Drain remaining messages from channel.
+			for {
+				select {
+				case msg := <-s.ch:
+					s.mu.Lock()
+					s.buf = append(s.buf, msg)
+					s.mu.Unlock()
+				default:
+					return s.flush(context.Background())
+				}
+			}
+		}
+	}
+}
+
+// flush writes the current buffer to S3 and resets it.
+func (s *S3Storage) flush(ctx context.Context) error {
+	s.mu.Lock()
+	if len(s.buf) == 0 {
+		s.mu.Unlock()
+		return nil
+	}
+	msgs := s.buf
+	s.buf = nil
+	s.mu.Unlock()
+
+	data, err := MarshalGzip(msgs)
+	if err != nil {
+		return fmt.Errorf("marshal+gzip: %w", err)
+	}
+
+	key := ChunkKey(s.cfg.Prefix, time.Now())
+
+	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:          aws.String(s.cfg.Bucket),
+		Key:             aws.String(key),
+		Body:            bytes.NewReader(data),
+		ContentType:     aws.String("application/gzip"),
+		ContentEncoding: aws.String("gzip"),
+	})
+	if err != nil {
+		return fmt.Errorf("PutObject %s: %w", key, err)
+	}
+
+	return nil
+}
+
+// ReadBefore returns up to `count` messages with timestamps before `before`,
+// ordered newest-first.
+func (s *S3Storage) ReadBefore(ctx context.Context, before time.Time, count int) ([]models.LogMessage, error) {
+	var result []models.LogMessage
+
+	// Walk backwards hour by hour starting from the hour containing `before`.
+	cur := before.UTC()
+
+	// Limit how far back we search (max 7 days).
+	limit := cur.Add(-7 * 24 * time.Hour)
+
+	for cur.After(limit) && len(result) < count {
+		prefix := HourPrefix(s.cfg.Prefix, cur)
+
+		keys, err := s.listKeys(ctx, prefix)
+		if err != nil {
+			return nil, err
+		}
+
+		// Sort keys in reverse order (newest chunks first within the hour).
+		sort.Sort(sort.Reverse(sort.StringSlice(keys)))
+
+		for _, key := range keys {
+			if len(result) >= count {
+				break
+			}
+			msgs, err := s.readChunk(ctx, key)
+			if err != nil {
+				return nil, fmt.Errorf("reading chunk %s: %w", key, err)
+			}
+			// Sort messages newest-first within the chunk.
+			sort.Slice(msgs, func(i, j int) bool {
+				return msgs[i].Timestamp.After(msgs[j].Timestamp)
+			})
+			for _, m := range msgs {
+				if m.Timestamp.Before(before) {
+					result = append(result, m)
+					if len(result) >= count {
+						break
+					}
+				}
+			}
+		}
+
+		// Move to the previous hour.
+		cur = cur.Truncate(time.Hour).Add(-time.Hour)
+	}
+
+	return result, nil
+}
+
+// listKeys lists all object keys under the given prefix.
+func (s *S3Storage) listKeys(ctx context.Context, prefix string) ([]string, error) {
+	var keys []string
+	var continuationToken *string
+
+	for {
+		out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(s.cfg.Bucket),
+			Prefix:            aws.String(prefix),
+			ContinuationToken: continuationToken,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("ListObjectsV2 prefix=%s: %w", prefix, err)
+		}
+		for _, obj := range out.Contents {
+			keys = append(keys, aws.ToString(obj.Key))
+		}
+		if !aws.ToBool(out.IsTruncated) {
+			break
+		}
+		continuationToken = out.NextContinuationToken
+	}
+
+	return keys, nil
+}
+
+// readChunk downloads an S3 object, decompresses it, and parses the JSON
+// array of LogMessage.
+func (s *S3Storage) readChunk(ctx context.Context, key string) ([]models.LogMessage, error) {
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.cfg.Bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer out.Body.Close()
+
+	return UnmarshalGzip(out.Body)
+}
+
+// ChunkKey builds the S3 key for a chunk written at time t.
+// Layout: {prefix}/{YYYY}/{MM}/{DD}/{HH}/chunk-{unix_ms}.json.gz
+func ChunkKey(prefix string, t time.Time) string {
+	u := t.UTC()
+	return fmt.Sprintf("%s/%04d/%02d/%02d/%02d/chunk-%d.json.gz",
+		strings.TrimRight(prefix, "/"),
+		u.Year(), u.Month(), u.Day(), u.Hour(),
+		u.UnixMilli(),
+	)
+}
+
+// HourPrefix returns the S3 prefix for the hour containing t.
+// Layout: {prefix}/{YYYY}/{MM}/{DD}/{HH}/
+func HourPrefix(prefix string, t time.Time) string {
+	u := t.UTC()
+	return fmt.Sprintf("%s/%04d/%02d/%02d/%02d/",
+		strings.TrimRight(prefix, "/"),
+		u.Year(), u.Month(), u.Day(), u.Hour(),
+	)
+}
+
+// MarshalGzip serializes messages to a gzipped JSON array.
+func MarshalGzip(msgs []models.LogMessage) ([]byte, error) {
+	jsonData, err := json.Marshal(msgs)
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write(jsonData); err != nil {
+		return nil, err
+	}
+	if err := gz.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// UnmarshalGzip decompresses gzipped data from r and parses a JSON array of
+// LogMessage. Decompressed data is limited to 50 MB to prevent memory exhaustion.
+func UnmarshalGzip(r io.Reader) ([]models.LogMessage, error) {
+	gz, err := gzip.NewReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("gzip reader: %w", err)
+	}
+	defer gz.Close()
+
+	const maxDecompressed = 50 << 20 // 50 MB
+	data, err := io.ReadAll(io.LimitReader(gz, maxDecompressed+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading gzip: %w", err)
+	}
+	if len(data) > maxDecompressed {
+		return nil, fmt.Errorf("decompressed chunk exceeds %d bytes limit", maxDecompressed)
+	}
+
+	var msgs []models.LogMessage
+	if err := json.Unmarshal(data, &msgs); err != nil {
+		return nil, fmt.Errorf("json unmarshal: %w", err)
+	}
+	return msgs, nil
+}
+
+// Verify S3Storage implements Storage at compile time.
+var _ Storage = (*S3Storage)(nil)

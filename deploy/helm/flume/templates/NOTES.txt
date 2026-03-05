@@ -1,0 +1,32 @@
+flume has been deployed!
+
+Release: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+
+=== Access the web UI ===
+
+Run the following command to forward the HTTP port to your local machine:
+
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "flume.fullname" . }} 8080:{{ .Values.service.httpPort }}
+
+Then open your browser at: http://localhost:8080
+
+=== Forward logs from Fluent Bit sidecars ===
+
+Configure your Fluent Bit sidecars to send logs to:
+
+  Host: {{ include "flume.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+  Port: {{ .Values.service.forwardPort }}
+
+See deploy/fluent-bit-sidecar.yaml in the flume repository for a
+complete sidecar configuration example.
+
+=== S3 persistence ===
+{{- if .Values.flume.s3.bucket }}
+S3 persistence is enabled. Logs will be flushed to:
+  Bucket:   {{ .Values.flume.s3.bucket }}
+  Prefix:   {{ .Values.flume.s3.prefix | default "(none)" }}
+  Region:   {{ .Values.flume.s3.region | default "(default)" }}
+{{- else }}
+S3 persistence is DISABLED. Set flume.s3.bucket in your values to enable it.
+{{- end }}
