@@ -25,6 +25,8 @@ flume:
     endpoint: ""
     flushInterval: "10s"
     flushCount: 1000
+    partitionLabel: ""
+    retention: ""
 
 serviceAccount:
   # Set to true to create a ServiceAccount for the pod.

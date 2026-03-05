@@ -42,8 +42,36 @@ func (m *mockS3Client) PutObject(_ context.Context, input *s3.PutObjectInput, _ 
 
 func (m *mockS3Client) ListObjectsV2(_ context.Context, input *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
 	prefix := aws.ToString(input.Prefix)
+	delimiter := aws.ToString(input.Delimiter)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if delimiter != "" {
+		// Simulate delimiter-based listing: return common prefixes.
+		prefixSet := make(map[string]bool)
+		for key := range m.objects {
+			if !strings.HasPrefix(key, prefix) {
+				continue
+			}
+			rest := strings.TrimPrefix(key, prefix)
+			idx := strings.Index(rest, delimiter)
+			if idx >= 0 {
+				cp := prefix + rest[:idx+len(delimiter)]
+				prefixSet[cp] = true
+			}
+		}
+		var cps []s3types.CommonPrefix
+		for p := range prefixSet {
+			cps = append(cps, s3types.CommonPrefix{Prefix: aws.String(p)})
+		}
+		sort.Slice(cps, func(i, j int) bool {
+			return aws.ToString(cps[i].Prefix) < aws.ToString(cps[j].Prefix)
+		})
+		return &s3.ListObjectsV2Output{
+			CommonPrefixes: cps,
+			IsTruncated:    aws.Bool(false),
+		}, nil
+	}
 
 	var contents []s3types.Object
 	for key := range m.objects {
@@ -53,7 +81,6 @@ func (m *mockS3Client) ListObjectsV2(_ context.Context, input *s3.ListObjectsV2I
 			})
 		}
 	}
-	// Sort for deterministic output.
 	sort.Slice(contents, func(i, j int) bool {
 		return aws.ToString(contents[i].Key) < aws.ToString(contents[j].Key)
 	})
@@ -75,6 +102,15 @@ func (m *mockS3Client) GetObject(_ context.Context, input *s3.GetObjectInput, _ 
 	return &s3.GetObjectOutput{
 		Body: io.NopCloser(bytes.NewReader(data)),
 	}, nil
+}
+
+func (m *mockS3Client) DeleteObjects(_ context.Context, input *s3.DeleteObjectsInput, _ ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, id := range input.Delete.Objects {
+		delete(m.objects, aws.ToString(id.Key))
+	}
+	return &s3.DeleteObjectsOutput{}, nil
 }
 
 // Verify mock implements S3Client.
@@ -246,8 +282,8 @@ func TestS3Storage_FlushOnCount(t *testing.T) {
 	numObjects := len(mock.objects)
 	mock.mu.Unlock()
 
-	if numObjects != 1 {
-		t.Errorf("expected 1 S3 object after count flush, got %d", numObjects)
+	if numObjects != 2 { // chunk + manifest
+		t.Errorf("expected 2 S3 objects after count flush (chunk+manifest), got %d", numObjects)
 	}
 
 	cancel()
@@ -279,8 +315,8 @@ func TestS3Storage_FlushOnInterval(t *testing.T) {
 	numObjects := len(mock.objects)
 	mock.mu.Unlock()
 
-	if numObjects != 1 {
-		t.Errorf("expected 1 S3 object after interval flush, got %d", numObjects)
+	if numObjects != 2 { // chunk + manifest
+		t.Errorf("expected 2 S3 objects after interval flush (chunk+manifest), got %d", numObjects)
 	}
 
 	cancel()
@@ -323,8 +359,8 @@ func TestS3Storage_FlushOnShutdown(t *testing.T) {
 	numObjects := len(mock.objects)
 	mock.mu.Unlock()
 
-	if numObjects != 1 {
-		t.Errorf("expected 1 S3 object after shutdown flush, got %d", numObjects)
+	if numObjects != 2 { // chunk + manifest
+		t.Errorf("expected 2 S3 objects after shutdown flush (chunk+manifest), got %d", numObjects)
 	}
 }
 
@@ -359,7 +395,7 @@ func TestS3Storage_ReadBefore(t *testing.T) {
 	stor := NewS3StorageWithClient(mock, cfg)
 
 	// Read all messages before now.
-	msgs, err := stor.ReadBefore(context.Background(), now, 10)
+	msgs, err := stor.ReadBefore(context.Background(), now, 10, nil)
 	if err != nil {
 		t.Fatalf("ReadBefore: %v", err)
 	}
@@ -394,7 +430,7 @@ func TestS3Storage_ReadBefore_LimitCount(t *testing.T) {
 
 	stor := NewS3StorageWithClient(mock, cfg)
 
-	got, err := stor.ReadBefore(context.Background(), now, 2)
+	got, err := stor.ReadBefore(context.Background(), now, 2, nil)
 	if err != nil {
 		t.Fatalf("ReadBefore: %v", err)
 	}
@@ -428,7 +464,7 @@ func TestS3Storage_ReadBefore_CrossHour(t *testing.T) {
 
 	// Ask for messages before 14:30, want 10 — should get both hours.
 	before := time.Date(2026, 3, 5, 14, 30, 0, 0, time.UTC)
-	got, err := stor.ReadBefore(context.Background(), before, 10)
+	got, err := stor.ReadBefore(context.Background(), before, 10, nil)
 	if err != nil {
 		t.Fatalf("ReadBefore: %v", err)
 	}
@@ -465,7 +501,7 @@ func TestS3Storage_ReadBefore_FiltersFuture(t *testing.T) {
 
 	stor := NewS3StorageWithClient(mock, cfg)
 
-	got, err := stor.ReadBefore(context.Background(), now, 10)
+	got, err := stor.ReadBefore(context.Background(), now, 10, nil)
 	if err != nil {
 		t.Fatalf("ReadBefore: %v", err)
 	}
@@ -509,7 +545,7 @@ func TestS3Storage_WriteAndReadRoundTrip(t *testing.T) {
 	<-errCh
 
 	// Now read back.
-	got, err := stor.ReadBefore(context.Background(), now, 10)
+	got, err := stor.ReadBefore(context.Background(), now, 10, nil)
 	if err != nil {
 		t.Fatalf("ReadBefore: %v", err)
 	}
@@ -535,7 +571,48 @@ func TestS3Storage_InterfaceCompliance(t *testing.T) {
 	var s Storage = NewS3StorageWithClient(mock, cfg)
 
 	_ = s.Writer()
-	_, _ = s.ReadBefore(context.Background(), time.Now(), 10)
+	_, _ = s.ReadBefore(context.Background(), time.Now(), 10, nil)
+}
+
+func TestS3Storage_ReadBefore_WithLabelFilter(t *testing.T) {
+	mock := newMockS3Client()
+	cfg := S3Config{
+		Bucket: "test-bucket",
+		Prefix: "ns",
+	}
+
+	now := time.Date(2026, 3, 5, 14, 30, 0, 0, time.UTC)
+
+	msgs := []models.LogMessage{
+		{ID: "err1", Content: "error msg", Timestamp: now.Add(-3 * time.Minute), Level: "error", Labels: map[string]string{"ns": "prod"}},
+		{ID: "info1", Content: "info msg", Timestamp: now.Add(-2 * time.Minute), Level: "info", Labels: map[string]string{"ns": "prod"}},
+		{ID: "err2", Content: "err staging", Timestamp: now.Add(-1 * time.Minute), Level: "error", Labels: map[string]string{"ns": "staging"}},
+	}
+	data, _ := MarshalGzip(msgs)
+	mock.objects[ChunkKey("ns", now)] = data
+
+	stor := NewS3StorageWithClient(mock, cfg)
+
+	// Filter by level=error
+	got, err := stor.ReadBefore(context.Background(), now, 10, map[string]string{"level": "error"})
+	if err != nil {
+		t.Fatalf("ReadBefore with filter: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 error messages, got %d", len(got))
+	}
+
+	// Filter by level=error AND ns=prod
+	got, err = stor.ReadBefore(context.Background(), now, 10, map[string]string{"level": "error", "ns": "prod"})
+	if err != nil {
+		t.Fatalf("ReadBefore with multi filter: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 message matching error+prod, got %d", len(got))
+	}
+	if got[0].ID != "err1" {
+		t.Errorf("expected err1, got %s", got[0].ID)
+	}
 }
 
 func TestNewS3StorageWithClient_Defaults(t *testing.T) {
@@ -551,5 +628,133 @@ func TestNewS3StorageWithClient_Defaults(t *testing.T) {
 	}
 	if stor.cfg.FlushCount != 1000 {
 		t.Errorf("default FlushCount = %d, want 1000", stor.cfg.FlushCount)
+	}
+}
+
+func TestPartitionedChunkKey(t *testing.T) {
+	ts := time.Date(2026, 3, 5, 14, 30, 0, 0, time.UTC)
+	got := PartitionedChunkKey("logs", "prod", ts)
+	if !strings.HasPrefix(got, "logs/prod/2026/03/05/14/chunk-") {
+		t.Errorf("unexpected key: %s", got)
+	}
+}
+
+func TestPartitionedHourPrefix(t *testing.T) {
+	ts := time.Date(2026, 3, 5, 14, 30, 0, 0, time.UTC)
+	got := PartitionedHourPrefix("logs", "prod", ts)
+	want := "logs/prod/2026/03/05/14/"
+	if got != want {
+		t.Errorf("PartitionedHourPrefix = %q, want %q", got, want)
+	}
+}
+
+func TestS3Storage_PartitionedFlush(t *testing.T) {
+	mock := newMockS3Client()
+	cfg := S3Config{
+		Bucket:         "test-bucket",
+		Prefix:         "ns",
+		FlushInterval:  100 * time.Millisecond,
+		FlushCount:     10000,
+		PartitionLabel: "env",
+	}
+	stor := NewS3StorageWithClient(mock, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- stor.Start(ctx) }()
+
+	now := time.Now().UTC()
+	stor.Writer() <- models.LogMessage{ID: "p1", Content: "prod", Timestamp: now, Labels: map[string]string{"env": "prod"}}
+	stor.Writer() <- models.LogMessage{ID: "s1", Content: "staging", Timestamp: now, Labels: map[string]string{"env": "staging"}}
+	stor.Writer() <- models.LogMessage{ID: "d1", Content: "no label", Timestamp: now}
+
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+	<-errCh
+
+	mock.mu.Lock()
+	numObjects := len(mock.objects)
+	mock.mu.Unlock()
+
+	if numObjects != 6 { // 3 chunks + 3 manifests
+		t.Errorf("expected 6 S3 objects (3 chunks + 3 manifests), got %d", numObjects)
+	}
+
+	// Verify keys contain partition names.
+	mock.mu.Lock()
+	var keys []string
+	for k := range mock.objects {
+		keys = append(keys, k)
+	}
+	mock.mu.Unlock()
+
+	hasProd, hasStaging, hasDefault := false, false, false
+	for _, k := range keys {
+		if strings.Contains(k, "/prod/") {
+			hasProd = true
+		}
+		if strings.Contains(k, "/staging/") {
+			hasStaging = true
+		}
+		if strings.Contains(k, "/_default/") {
+			hasDefault = true
+		}
+	}
+	if !hasProd {
+		t.Error("missing prod partition chunk")
+	}
+	if !hasStaging {
+		t.Error("missing staging partition chunk")
+	}
+	if !hasDefault {
+		t.Error("missing _default partition chunk")
+	}
+}
+
+func TestS3Storage_PartitionedRead_Scoped(t *testing.T) {
+	mock := newMockS3Client()
+	cfg := S3Config{
+		Bucket:         "test-bucket",
+		Prefix:         "ns",
+		PartitionLabel: "env",
+	}
+
+	now := time.Date(2026, 3, 5, 14, 30, 0, 0, time.UTC)
+
+	// Write a chunk to the "prod" partition.
+	prodMsgs := []models.LogMessage{
+		{ID: "p1", Content: "prod msg", Timestamp: now.Add(-2 * time.Minute), Labels: map[string]string{"env": "prod"}},
+	}
+	prodData, _ := MarshalGzip(prodMsgs)
+	mock.objects[PartitionedChunkKey("ns", "prod", now)] = prodData
+
+	// Write a chunk to the "staging" partition.
+	stagingMsgs := []models.LogMessage{
+		{ID: "s1", Content: "staging msg", Timestamp: now.Add(-1 * time.Minute), Labels: map[string]string{"env": "staging"}},
+	}
+	stagingData, _ := MarshalGzip(stagingMsgs)
+	mock.objects[PartitionedChunkKey("ns", "staging", now)] = stagingData
+
+	stor := NewS3StorageWithClient(mock, cfg)
+
+	// Filtered read scoped to prod should only return prod messages.
+	got, err := stor.ReadBefore(context.Background(), now, 10, map[string]string{"env": "prod"})
+	if err != nil {
+		t.Fatalf("ReadBefore: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 prod message, got %d", len(got))
+	}
+	if got[0].ID != "p1" {
+		t.Errorf("expected p1, got %s", got[0].ID)
+	}
+
+	// Unfiltered read should find both partitions.
+	got, err = stor.ReadBefore(context.Background(), now, 10, nil)
+	if err != nil {
+		t.Fatalf("ReadBefore unfiltered: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 messages across partitions, got %d", len(got))
 	}
 }

@@ -18,6 +18,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/interpt-co/flume/internal/models"
+	"github.com/interpt-co/flume/internal/query"
 )
 
 // S3Client abstracts the S3 operations we need, making the storage testable.
@@ -25,16 +26,19 @@ type S3Client interface {
 	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	ListObjectsV2(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	DeleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error)
 }
 
 // S3Config holds configuration for the S3 storage backend.
 type S3Config struct {
-	Bucket        string        // S3 bucket name
-	Prefix        string        // Key prefix (typically namespace name)
-	Region        string        // AWS region
-	Endpoint      string        // Custom endpoint (MinIO, localstack)
-	FlushInterval time.Duration // Default 10s
-	FlushCount    int           // Default 1000
+	Bucket         string        // S3 bucket name
+	Prefix         string        // Key prefix (typically namespace name)
+	Region         string        // AWS region
+	Endpoint       string        // Custom endpoint (MinIO, localstack)
+	FlushInterval  time.Duration // Default 10s
+	FlushCount     int           // Default 1000
+	PartitionLabel string        // Partition S3 keys by this label (empty = no partitioning)
+	Retention      time.Duration // TTL for S3 data (0 = disabled)
 }
 
 // S3Storage implements Storage backed by S3-compatible object storage.
@@ -104,6 +108,10 @@ func (s *S3Storage) Writer() chan<- models.LogMessage {
 // Start runs the background flush loop. It blocks until ctx is cancelled,
 // then flushes any remaining buffered messages.
 func (s *S3Storage) Start(ctx context.Context) error {
+	if s.cfg.Retention > 0 {
+		go RunRetentionLoop(ctx, s.client, s.cfg)
+	}
+
 	ticker := time.NewTicker(s.cfg.FlushInterval)
 	defer ticker.Stop()
 
@@ -147,7 +155,9 @@ func (s *S3Storage) Start(ctx context.Context) error {
 	}
 }
 
-// flush writes the current buffer to S3 and resets it.
+// flush writes the current buffer to S3 and resets it. If PartitionLabel is
+// set, messages are grouped by label value and each group is written to its
+// own partitioned key.
 func (s *S3Storage) flush(ctx context.Context) error {
 	s.mu.Lock()
 	if len(s.buf) == 0 {
@@ -158,12 +168,45 @@ func (s *S3Storage) flush(ctx context.Context) error {
 	s.buf = nil
 	s.mu.Unlock()
 
+	now := time.Now()
+
+	if s.cfg.PartitionLabel == "" {
+		key := ChunkKey(s.cfg.Prefix, now)
+		if err := s.writeChunk(ctx, msgs, key); err != nil {
+			return err
+		}
+		s.appendManifestAfterFlush(ctx, key, msgs, "")
+		return nil
+	}
+
+	// Group messages by partition label value.
+	groups := make(map[string][]models.LogMessage)
+	for _, m := range msgs {
+		partition := "_default"
+		if m.Labels != nil {
+			if v, ok := m.Labels[s.cfg.PartitionLabel]; ok && v != "" {
+				partition = v
+			}
+		}
+		groups[partition] = append(groups[partition], m)
+	}
+
+	for partition, group := range groups {
+		key := PartitionedChunkKey(s.cfg.Prefix, partition, now)
+		if err := s.writeChunk(ctx, group, key); err != nil {
+			return err
+		}
+		s.appendManifestAfterFlush(ctx, key, group, partition)
+	}
+	return nil
+}
+
+// writeChunk marshals messages to gzipped JSON and writes them to S3 at the given key.
+func (s *S3Storage) writeChunk(ctx context.Context, msgs []models.LogMessage, key string) error {
 	data, err := MarshalGzip(msgs)
 	if err != nil {
 		return fmt.Errorf("marshal+gzip: %w", err)
 	}
-
-	key := ChunkKey(s.cfg.Prefix, time.Now())
 
 	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:          aws.String(s.cfg.Bucket),
@@ -175,59 +218,157 @@ func (s *S3Storage) flush(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("PutObject %s: %w", key, err)
 	}
-
 	return nil
 }
 
 // ReadBefore returns up to `count` messages with timestamps before `before`,
-// ordered newest-first.
-func (s *S3Storage) ReadBefore(ctx context.Context, before time.Time, count int) ([]models.LogMessage, error) {
+// ordered newest-first. If filter is non-nil, only messages matching all
+// filter labels are returned. When PartitionLabel is configured and the filter
+// contains that label, reads are scoped to that partition only.
+func (s *S3Storage) ReadBefore(ctx context.Context, before time.Time, count int, filter map[string]string) ([]models.LogMessage, error) {
 	var result []models.LogMessage
+
+	matcher := query.LabelMatcher(filter)
+
+	// Determine which partitions to scan.
+	partitions := s.resolvePartitions(ctx, filter)
 
 	// Walk backwards hour by hour starting from the hour containing `before`.
 	cur := before.UTC()
-
-	// Limit how far back we search (max 7 days).
 	limit := cur.Add(-7 * 24 * time.Hour)
 
 	for cur.After(limit) && len(result) < count {
-		prefix := HourPrefix(s.cfg.Prefix, cur)
-
-		keys, err := s.listKeys(ctx, prefix)
-		if err != nil {
-			return nil, err
-		}
-
-		// Sort keys in reverse order (newest chunks first within the hour).
-		sort.Sort(sort.Reverse(sort.StringSlice(keys)))
-
-		for _, key := range keys {
+		for _, partition := range partitions {
 			if len(result) >= count {
 				break
 			}
-			msgs, err := s.readChunk(ctx, key)
+
+			chunkKeys, err := s.resolveChunkKeys(ctx, partition, cur, before, filter)
 			if err != nil {
-				return nil, fmt.Errorf("reading chunk %s: %w", key, err)
+				return nil, err
 			}
-			// Sort messages newest-first within the chunk.
-			sort.Slice(msgs, func(i, j int) bool {
-				return msgs[i].Timestamp.After(msgs[j].Timestamp)
-			})
-			for _, m := range msgs {
-				if m.Timestamp.Before(before) {
-					result = append(result, m)
-					if len(result) >= count {
-						break
+
+			for _, key := range chunkKeys {
+				if len(result) >= count {
+					break
+				}
+				msgs, err := s.readChunk(ctx, key)
+				if err != nil {
+					return nil, fmt.Errorf("reading chunk %s: %w", key, err)
+				}
+				sort.Slice(msgs, func(i, j int) bool {
+					return msgs[i].Timestamp.After(msgs[j].Timestamp)
+				})
+				for _, m := range msgs {
+					if m.Timestamp.Before(before) && matcher.Matches(m) {
+						result = append(result, m)
+						if len(result) >= count {
+							break
+						}
 					}
 				}
 			}
 		}
 
-		// Move to the previous hour.
 		cur = cur.Truncate(time.Hour).Add(-time.Hour)
 	}
 
 	return result, nil
+}
+
+// resolvePartitions determines which partition prefixes to scan.
+// - No partitioning configured: returns [""] (scan unpartitioned prefix)
+// - Partitioning + filter contains partition label: returns [filterValue] (scoped)
+// - Partitioning + no filter match: discovers partitions via listing
+func (s *S3Storage) resolvePartitions(ctx context.Context, filter map[string]string) []string {
+	if s.cfg.PartitionLabel == "" {
+		return []string{""}
+	}
+
+	// If filter specifies the partition label, scope to that partition only.
+	if filter != nil {
+		if v, ok := filter[s.cfg.PartitionLabel]; ok {
+			return []string{v}
+		}
+	}
+
+	// Discover partitions by listing at the prefix level.
+	partitions, err := s.listPartitions(ctx)
+	if err != nil {
+		return []string{""}
+	}
+	if len(partitions) == 0 {
+		return []string{""}
+	}
+	return partitions
+}
+
+// listPartitions discovers partition directories under the configured prefix
+// using a delimiter-based listing.
+func (s *S3Storage) listPartitions(ctx context.Context) ([]string, error) {
+	prefix := strings.TrimRight(s.cfg.Prefix, "/") + "/"
+	delimiter := "/"
+
+	out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket:    aws.String(s.cfg.Bucket),
+		Prefix:    aws.String(prefix),
+		Delimiter: aws.String(delimiter),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var partitions []string
+	for _, cp := range out.CommonPrefixes {
+		p := aws.ToString(cp.Prefix)
+		// Extract partition name: strip prefix and trailing slash.
+		p = strings.TrimPrefix(p, prefix)
+		p = strings.TrimSuffix(p, "/")
+		if p != "" {
+			partitions = append(partitions, p)
+		}
+	}
+	return partitions, nil
+}
+
+// resolveChunkKeys returns chunk keys for a given partition+hour, using the
+// manifest to prune irrelevant chunks when available. Falls back to listing.
+func (s *S3Storage) resolveChunkKeys(ctx context.Context, partition string, hour, before time.Time, filter map[string]string) ([]string, error) {
+	mKey := ManifestKey(s.cfg.Prefix, partition, hour)
+	manifest, err := ReadManifest(ctx, s.client, s.cfg.Bucket, mKey)
+	if err != nil {
+		// Log and fall through to listing.
+		log.WithError(err).Debug("storage: failed to read manifest, falling back to listing")
+	}
+
+	if manifest != nil && len(manifest.Chunks) > 0 {
+		var keys []string
+		for _, chunk := range manifest.Chunks {
+			if !manifestTimeOverlaps(chunk, before) {
+				continue
+			}
+			if !manifestMatchesFilter(chunk, filter) {
+				continue
+			}
+			keys = append(keys, chunk.Key)
+		}
+		sort.Sort(sort.Reverse(sort.StringSlice(keys)))
+		return keys, nil
+	}
+
+	// Fall back to listing.
+	var prefix string
+	if partition == "" {
+		prefix = HourPrefix(s.cfg.Prefix, hour)
+	} else {
+		prefix = PartitionedHourPrefix(s.cfg.Prefix, partition, hour)
+	}
+	keys, err := s.listKeys(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(keys)))
+	return keys, nil
 }
 
 // listKeys lists all object keys under the given prefix.
@@ -288,6 +429,29 @@ func HourPrefix(prefix string, t time.Time) string {
 	u := t.UTC()
 	return fmt.Sprintf("%s/%04d/%02d/%02d/%02d/",
 		strings.TrimRight(prefix, "/"),
+		u.Year(), u.Month(), u.Day(), u.Hour(),
+	)
+}
+
+// PartitionedChunkKey builds the S3 key for a partitioned chunk.
+// Layout: {prefix}/{partition}/{YYYY}/{MM}/{DD}/{HH}/chunk-{unix_ms}.json.gz
+func PartitionedChunkKey(prefix, partition string, t time.Time) string {
+	u := t.UTC()
+	return fmt.Sprintf("%s/%s/%04d/%02d/%02d/%02d/chunk-%d.json.gz",
+		strings.TrimRight(prefix, "/"),
+		partition,
+		u.Year(), u.Month(), u.Day(), u.Hour(),
+		u.UnixMilli(),
+	)
+}
+
+// PartitionedHourPrefix returns the S3 prefix for a partition's hour.
+// Layout: {prefix}/{partition}/{YYYY}/{MM}/{DD}/{HH}/
+func PartitionedHourPrefix(prefix, partition string, t time.Time) string {
+	u := t.UTC()
+	return fmt.Sprintf("%s/%s/%04d/%02d/%02d/%02d/",
+		strings.TrimRight(prefix, "/"),
+		partition,
 		u.Year(), u.Month(), u.Day(), u.Hour(),
 	)
 }

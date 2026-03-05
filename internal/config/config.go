@@ -22,8 +22,10 @@ type Config struct {
 	S3Prefix        string
 	S3Region        string
 	S3Endpoint      string        // custom endpoint (MinIO, localstack)
-	S3FlushInterval time.Duration // default 10s
-	S3FlushCount    int           // default 1000
+	S3FlushInterval  time.Duration // default 10s
+	S3FlushCount     int           // default 1000
+	S3PartitionLabel string        // partition S3 keys by this label (empty = no partitioning)
+	S3Retention      time.Duration // TTL for S3 data (0 = disabled)
 }
 
 // DefaultConfig returns the default configuration.

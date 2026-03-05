@@ -3,15 +3,18 @@ import { ref, onMounted } from 'vue'
 import LogViewer from './components/LogViewer.vue'
 import LogDetail from './components/LogDetail.vue'
 import SearchBar from './components/SearchBar.vue'
+import LabelFilter from './components/LabelFilter.vue'
 import ColumnConfig from './components/ColumnConfig.vue'
 import StatusBar from './components/StatusBar.vue'
 import ThemeToggle from './components/ThemeToggle.vue'
 import PaletteToggle from './components/PaletteToggle.vue'
 import { useWebSocket } from './composables/useWebSocket'
 import { useTheme } from './composables/useTheme'
+import { useLabelsStore } from './stores/labels'
 import type { LogMessage } from './types'
 
 useTheme()
+const labelsStore = useLabelsStore()
 
 const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
 const wsUrl = `${wsProtocol}//${window.location.host}/ws`
@@ -31,6 +34,7 @@ function closeDetail() {
 
 onMounted(() => {
   connect()
+  labelsStore.startPolling()
 })
 </script>
 
@@ -45,6 +49,7 @@ onMounted(() => {
       </div>
     </header>
     <SearchBar />
+    <LabelFilter />
     <LogViewer class="flume-main" :selected-message="selectedMessage" @row-click="onRowClick" />
     <LogDetail :message="selectedMessage" :visible="detailVisible" @close="closeDetail" />
     <StatusBar />

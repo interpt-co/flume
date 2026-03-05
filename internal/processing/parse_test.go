@@ -9,7 +9,7 @@ import (
 
 func TestParseWorker_ValidJSON(t *testing.T) {
 	msg := models.LogMessage{Content: `{"key":"value"}`}
-	out, err := parseWorker(context.Background(), msg)
+	out, err := ParseWorker(context.Background(), msg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -23,7 +23,7 @@ func TestParseWorker_ValidJSON(t *testing.T) {
 
 func TestParseWorker_InvalidJSON(t *testing.T) {
 	msg := models.LogMessage{Content: "not json at all"}
-	out, err := parseWorker(context.Background(), msg)
+	out, err := ParseWorker(context.Background(), msg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestParseWorker_InvalidJSON(t *testing.T) {
 
 func TestParseWorker_EmptyString(t *testing.T) {
 	msg := models.LogMessage{Content: ""}
-	out, err := parseWorker(context.Background(), msg)
+	out, err := ParseWorker(context.Background(), msg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestParseWorker_EmptyString(t *testing.T) {
 func TestParseWorker_NestedJSON(t *testing.T) {
 	nested := `{"outer":{"inner":[1,2,3],"flag":true}}`
 	msg := models.LogMessage{Content: nested}
-	out, err := parseWorker(context.Background(), msg)
+	out, err := ParseWorker(context.Background(), msg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestParseWorker_NestedJSON(t *testing.T) {
 func TestParseWorker_JSONArray(t *testing.T) {
 	arr := `[1, "two", null, true]`
 	msg := models.LogMessage{Content: arr}
-	out, err := parseWorker(context.Background(), msg)
+	out, err := ParseWorker(context.Background(), msg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestParseWorker_JSONArray(t *testing.T) {
 
 func TestParseWorker_PartialJSON(t *testing.T) {
 	msg := models.LogMessage{Content: `{"key": "value"`} // missing closing brace
-	out, err := parseWorker(context.Background(), msg)
+	out, err := ParseWorker(context.Background(), msg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
