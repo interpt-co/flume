@@ -20,9 +20,14 @@ type Config struct {
 	Verbose      bool
 
 	// Redis connection.
-	RedisAddr     string
-	RedisPassword string
-	RedisDB       int
+	RedisAddr          string
+	RedisPassword      string
+	RedisDB            int
+	RedisUseTLS        bool
+	RedisTLSCertFile   string
+	RedisTLSKeyFile    string
+	RedisTLSCACertFile string
+	RedisTLSSkipVerify bool
 
 	// S3 storage settings (read-only for history).
 	S3Bucket   string
@@ -53,15 +58,27 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	}
 
 	// 1. Connect to Redis.
-	redisClient := flumeredis.NewClient(flumeredis.Config{
-		Addr:     d.cfg.RedisAddr,
-		Password: d.cfg.RedisPassword,
-		DB:       d.cfg.RedisDB,
+	redisClient, err := flumeredis.NewClient(flumeredis.Config{
+		Addr:          d.cfg.RedisAddr,
+		Password:      d.cfg.RedisPassword,
+		DB:            d.cfg.RedisDB,
+		UseTLS:        d.cfg.RedisUseTLS,
+		TLSCertFile:   d.cfg.RedisTLSCertFile,
+		TLSKeyFile:    d.cfg.RedisTLSKeyFile,
+		TLSCACertFile: d.cfg.RedisTLSCACertFile,
+		TLSSkipVerify: d.cfg.RedisTLSSkipVerify,
 	})
+	if err != nil {
+		return fmt.Errorf("redis client: %w", err)
+	}
 	if err := redisClient.Ping(ctx); err != nil {
 		return fmt.Errorf("redis ping: %w", err)
 	}
-	defer redisClient.Close()
+	defer func() {
+		if err := redisClient.Close(); err != nil {
+			log.WithError(err).Warn("dispatcher: error closing Redis connection")
+		}
+	}()
 
 	reader := flumeredis.NewReader(redisClient)
 	subscriber := flumeredis.NewSubscriber(redisClient)

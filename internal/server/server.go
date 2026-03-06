@@ -61,9 +61,10 @@ func NewServer(host string, port int, manager *ClientManager, opts ...ServerOpti
 		httpServer: &http.Server{
 			Addr:         net.JoinHostPort(host, fmt.Sprintf("%d", port)),
 			Handler:      mux,
-			ReadTimeout:  10 * time.Second,
-			WriteTimeout: 30 * time.Second,
-			IdleTimeout:  120 * time.Second,
+			ReadTimeout:       10 * time.Second,
+			ReadHeaderTimeout: 5 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       120 * time.Second,
 		},
 		manager: manager,
 	}

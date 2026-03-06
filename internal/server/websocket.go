@@ -51,7 +51,9 @@ func (m *ClientManager) RedisReader() *flumeredis.Reader {
 
 // SetAuthConfig sets the auth callback configuration for WebSocket upgrades.
 func (m *ClientManager) SetAuthConfig(ac *AuthConfig) {
+	m.mu.Lock()
 	m.auth = ac
+	m.mu.Unlock()
 }
 
 var upgrader = websocket.Upgrader{
@@ -77,7 +79,10 @@ func (m *ClientManager) HandleWS(w http.ResponseWriter, r *http.Request) {
 	patternName := r.URL.Query().Get("pattern")
 
 	// Auth callback (before WebSocket upgrade).
-	if allowed, reason := m.auth.Check(r, preFilter, patternName); !allowed {
+	m.mu.RLock()
+	auth := m.auth
+	m.mu.RUnlock()
+	if allowed, reason := auth.Check(r, preFilter, patternName); !allowed {
 		http.Error(w, reason, http.StatusForbidden)
 		return
 	}
@@ -93,8 +98,9 @@ func (m *ClientManager) HandleWS(w http.ResponseWriter, r *http.Request) {
 	c.preFilter = preFilter
 
 	// Subscribe to pattern: from query param, or default to first available.
+	// Use client context (not r.Context which may be cancelled after handler returns).
 	if patternName == "" {
-		patterns, _ := m.redisReader.GetPatterns(r.Context())
+		patterns, _ := m.redisReader.GetPatterns(c.connCtx)
 		if len(patterns) > 0 {
 			patternName = patterns[0]
 		}
@@ -112,11 +118,11 @@ func (m *ClientManager) HandleWS(w http.ResponseWriter, r *http.Request) {
 		ClientID:   id,
 		PreFilters: c.preFilter,
 	}
-	patterns, _ := m.redisReader.GetPatterns(r.Context())
+	patterns, _ := m.redisReader.GetPatterns(c.connCtx)
 	joined.Patterns = patterns
 	if c.pattern != "" {
 		joined.DefaultPattern = c.pattern
-		if stats, err := m.redisReader.GetStats(r.Context(), c.pattern); err == nil {
+		if stats, err := m.redisReader.GetStats(c.connCtx, c.pattern); err == nil {
 			joined.BufferSize = int(stats.BufferCapacity)
 		}
 	} else if len(patterns) > 0 {
@@ -125,7 +131,7 @@ func (m *ClientManager) HandleWS(w http.ResponseWriter, r *http.Request) {
 
 	c.writeJSON(wsMessage{
 		Type: "client_joined",
-		Data: mustMarshal(joined),
+		Data: safeJSON(joined),
 	})
 
 	go c.readPump()

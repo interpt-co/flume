@@ -36,10 +36,15 @@ func (w *Watcher) GetLabels(namespace, pod string) map[string]string {
 }
 
 // SetLabels sets labels for a pod. Used for testing or manual enrichment.
+// The map is copied to avoid races with the caller.
 func (w *Watcher) SetLabels(namespace, pod string, labels map[string]string) {
+	cp := make(map[string]string, len(labels))
+	for k, v := range labels {
+		cp[k] = v
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.labels[namespace+"/"+pod] = labels
+	w.labels[namespace+"/"+pod] = cp
 }
 
 // Start begins watching pods on the given node. It blocks until ctx is cancelled.

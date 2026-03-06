@@ -73,6 +73,8 @@ func (m *ClientManager) HandleLoadRange(w http.ResponseWriter, r *http.Request) 
 		msgs, err = m.redisReader.GetMessages(r.Context(), patternName, start, count)
 		if err != nil {
 			log.WithError(err).Warn("HandleLoadRange: redis read error")
+			http.Error(w, `{"error":"failed to read messages"}`, http.StatusInternalServerError)
+			return
 		}
 	}
 

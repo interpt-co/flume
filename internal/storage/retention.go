@@ -211,7 +211,7 @@ func deleteAllUnder(ctx context.Context, client S3Client, bucket, prefix string)
 			ids = append(ids, s3types.ObjectIdentifier{Key: obj.Key})
 		}
 
-		_, err = client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		delOut, err := client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
 			Bucket: aws.String(bucket),
 			Delete: &s3types.Delete{
 				Objects: ids,
@@ -220,6 +220,11 @@ func deleteAllUnder(ctx context.Context, client S3Client, bucket, prefix string)
 		})
 		if err != nil {
 			return fmt.Errorf("DeleteObjects: %w", err)
+		}
+		if delOut != nil && len(delOut.Errors) > 0 {
+			e := delOut.Errors[0]
+			return fmt.Errorf("DeleteObjects partial failure: key=%s code=%s: %s",
+				aws.ToString(e.Key), aws.ToString(e.Code), aws.ToString(e.Message))
 		}
 	}
 }

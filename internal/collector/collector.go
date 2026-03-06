@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/nxadm/tail"
 	"github.com/paulofilip3/pipeline"
@@ -77,11 +78,19 @@ func (c *Collector) Run(ctx context.Context) error {
 	// 2. Create Redis writer (if configured).
 	var redisWriter *flumeredis.Writer
 	if c.cfg.Redis.Addr != "" {
-		redisClient := flumeredis.NewClient(flumeredis.Config{
-			Addr:     c.cfg.Redis.Addr,
-			Password: c.cfg.Redis.Password,
-			DB:       c.cfg.Redis.DB,
+		redisClient, err := flumeredis.NewClient(flumeredis.Config{
+			Addr:          c.cfg.Redis.Addr,
+			Password:      c.cfg.Redis.Password,
+			DB:            c.cfg.Redis.DB,
+			UseTLS:        c.cfg.Redis.UseTLS,
+			TLSCertFile:   c.cfg.Redis.TLSCertFile,
+			TLSKeyFile:    c.cfg.Redis.TLSKeyFile,
+			TLSCACertFile: c.cfg.Redis.TLSCACertFile,
+			TLSSkipVerify: c.cfg.Redis.TLSSkipVerify,
 		})
+		if err != nil {
+			return fmt.Errorf("redis client: %w", err)
+		}
 		if err := redisClient.Ping(ctx); err != nil {
 			return fmt.Errorf("redis ping: %w", err)
 		}
@@ -144,17 +153,17 @@ func (c *Collector) Run(ctx context.Context) error {
 	assembler := cri.NewAssembler()
 
 	// Track active tailers for cleanup.
-	type tailerCancel struct {
-		cancel context.CancelFunc
-	}
-	tailers := make(map[string]tailerCancel)
+	tailers := make(map[string]context.CancelFunc)
+	var tailWg sync.WaitGroup
 
 	// 6. Handle file events.
 	go func() {
 		defer func() {
-			for _, tc := range tailers {
-				tc.cancel()
+			for _, cancel := range tailers {
+				cancel()
 			}
+			tailWg.Wait()
+			close(merged)
 		}()
 		for {
 			select {
@@ -170,12 +179,16 @@ func (c *Collector) Run(ctx context.Context) error {
 						continue
 					}
 					tCtx, tCancel := context.WithCancel(ctx)
-					tailers[event.Path] = tailerCancel{cancel: tCancel}
-					go tailFile(tCtx, event, podWatcher, assembler, merged)
+					tailers[event.Path] = tCancel
+					tailWg.Add(1)
+					go func() {
+						defer tailWg.Done()
+						tailFile(tCtx, event, podWatcher, assembler, merged)
+					}()
 
 				case discovery.FileRemoved:
-					if tc, ok := tailers[event.Path]; ok {
-						tc.cancel()
+					if cancel, ok := tailers[event.Path]; ok {
+						cancel()
 						delete(tailers, event.Path)
 					}
 				}

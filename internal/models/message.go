@@ -9,13 +9,9 @@ import (
 type SourceType string
 
 const (
-	SourceLoki      SourceType = "loki"
+	SourceContainer SourceType = "container"
 	SourceStdin     SourceType = "stdin"
 	SourceFile      SourceType = "file"
-	SourceSocket    SourceType = "socket"
-	SourceForward   SourceType = "forward"
-	SourceDemo      SourceType = "demo"
-	SourceContainer SourceType = "container"
 )
 
 // KubeMeta holds Kubernetes-specific metadata for a log message.

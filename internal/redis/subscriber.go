@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/interpt-co/flume/internal/models"
@@ -96,7 +97,12 @@ func (s *Subscriber) subscribeLoop(ctx context.Context, pattern string, out chan
 func (s *Subscriber) backfill(ctx context.Context, pattern string, out chan<- []models.LogMessage) {
 	key := s.client.msgsKey(pattern)
 	// Get latest 100 messages for backfill.
-	vals, err := s.client.rdb.ZRevRange(ctx, key, 0, 99).Result()
+	vals, err := s.client.rdb.ZRangeArgs(ctx, goredis.ZRangeArgs{
+		Key:   key,
+		Start: 0,
+		Stop:  99,
+		Rev:   true,
+	}).Result()
 	if err != nil || len(vals) == 0 {
 		return
 	}
@@ -116,17 +122,9 @@ func (s *Subscriber) backfill(ctx context.Context, pattern string, out chan<- []
 }
 
 func decodePubSubPayload(payload string) ([]models.LogMessage, error) {
-	var rawMsgs []json.RawMessage
-	if err := json.Unmarshal([]byte(payload), &rawMsgs); err != nil {
+	var msgs []models.LogMessage
+	if err := json.Unmarshal([]byte(payload), &msgs); err != nil {
 		return nil, err
-	}
-	msgs := make([]models.LogMessage, 0, len(rawMsgs))
-	for _, raw := range rawMsgs {
-		var msg models.LogMessage
-		if err := json.Unmarshal(raw, &msg); err != nil {
-			return nil, err
-		}
-		msgs = append(msgs, msg)
 	}
 	return msgs, nil
 }

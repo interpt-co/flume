@@ -25,13 +25,12 @@ func EnrichWorker(_ context.Context, msg models.LogMessage) (models.LogMessage, 
 
 // knownLevels is the set of recognised log level strings (all lowercase).
 var knownLevels = map[string]bool{
-	"trace":   true,
-	"debug":   true,
-	"info":    true,
-	"warn":    true,
-	"warning": true,
-	"error":   true,
-	"fatal":   true,
+	"trace": true,
+	"debug": true,
+	"info":  true,
+	"warn":  true,
+	"error": true,
+	"fatal": true,
 }
 
 // normalizeLevel maps common aliases to their canonical short form.

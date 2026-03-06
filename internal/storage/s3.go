@@ -141,7 +141,9 @@ func (s *S3Storage) Start(ctx context.Context) error {
 			}
 
 		case <-ctx.Done():
-			// Drain remaining messages from channel.
+			// Drain remaining messages from channel with a deadline.
+			drainCtx, drainCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer drainCancel()
 			for {
 				select {
 				case msg := <-s.ch:
@@ -149,7 +151,7 @@ func (s *S3Storage) Start(ctx context.Context) error {
 					s.buf = append(s.buf, msg)
 					s.mu.Unlock()
 				default:
-					return s.flush(context.Background())
+					return s.flush(drainCtx)
 				}
 			}
 		}
@@ -215,8 +217,7 @@ func (s *S3Storage) writeChunk(ctx context.Context, msgs []models.LogMessage, ke
 		Bucket:          aws.String(s.cfg.Bucket),
 		Key:             aws.String(key),
 		Body:            bytes.NewReader(data),
-		ContentType:     aws.String("application/gzip"),
-		ContentEncoding: aws.String("gzip"),
+		ContentType: aws.String("application/gzip"),
 	})
 	if err != nil {
 		return fmt.Errorf("PutObject %s: %w", key, err)
@@ -475,12 +476,6 @@ func NodePatternPrefix(prefix, node, pattern string) string {
 		strings.TrimRight(prefix, "/"),
 		node, pattern,
 	)
-}
-
-// NodePatternChunkKey builds the S3 key scoped to a node and pattern.
-// Layout: {prefix}/{node}/{pattern}/{YYYY}/{MM}/{DD}/{HH}/chunk-{unix_ms}.json.gz
-func NodePatternChunkKey(prefix, node, pattern string, t time.Time) string {
-	return ChunkKey(NodePatternPrefix(prefix, node, pattern), t)
 }
 
 // NodePatternHourPrefix returns the S3 prefix for a node+pattern's hour.
