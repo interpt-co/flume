@@ -2,6 +2,12 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { StatusData, LogMessage } from '../types'
 import { useLogsStore, WINDOW_SIZE } from './logs'
+import { usePatternsStore } from './patterns'
+
+function patternParam(): string {
+  const patternsStore = usePatternsStore()
+  return patternsStore.current ? `&pattern=${encodeURIComponent(patternsStore.current)}` : ''
+}
 
 export const useConnectionStore = defineStore('connection', () => {
   const status = ref<'connecting' | 'connected' | 'disconnected'>('disconnected')
@@ -56,7 +62,8 @@ export const useConnectionStore = defineStore('connection', () => {
       const count = Math.min(bufUsed, WINDOW_SIZE)
       const start = bufUsed - count
 
-      const res = await fetch(`/api/client/load?start=${start}&count=${count}`)
+      const pp = patternParam()
+      const res = await fetch(`/api/client/load?start=${start}&count=${count}${pp}`)
       const data = await res.json() as { messages: LogMessage[]; total: number }
       logsStore.setInitialMessages(data.messages, start)
     } catch {
@@ -70,13 +77,15 @@ export const useConnectionStore = defineStore('connection', () => {
 
     logsStore.isLoadingHistory = true
     try {
+      const pp = patternParam()
+
       if (logsStore.oldestLoadedIndex > 0) {
         // Load from ring buffer
         const start = Math.max(0, logsStore.oldestLoadedIndex - WINDOW_SIZE)
         const count = logsStore.oldestLoadedIndex - start
         if (count <= 0) return
 
-        const res = await fetch(`/api/client/load?start=${start}&count=${count}`)
+        const res = await fetch(`/api/client/load?start=${start}&count=${count}${pp}`)
         const data = await res.json() as { messages: LogMessage[]; total: number }
         logsStore.prependHistory(data.messages, start)
       } else if (logsStore.s3HasMore) {
@@ -84,7 +93,7 @@ export const useConnectionStore = defineStore('connection', () => {
         const before = logsStore.oldestTimestamp
         if (!before) return
 
-        const res = await fetch(`/api/history?before=${encodeURIComponent(before)}&count=${WINDOW_SIZE}`)
+        const res = await fetch(`/api/history?before=${encodeURIComponent(before)}&count=${WINDOW_SIZE}${pp}`)
         const data = await res.json() as { messages: LogMessage[]; has_more: boolean }
 
         if (!data.has_more) {
@@ -92,7 +101,6 @@ export const useConnectionStore = defineStore('connection', () => {
         }
 
         if (data.messages && data.messages.length > 0) {
-          // API returns newest-first; reverse so oldest is first for prepending
           const sorted = [...data.messages].reverse()
           logsStore.prependHistory(sorted, 0)
         } else {

@@ -1,52 +1,61 @@
-nameOverride: ""
-fullnameOverride: ""
-
-replicaCount: 1
-
 image:
-  repository: interpt-co/flume
-  # Defaults to the chart appVersion when left empty.
+  repository: ghcr.io/interpt-co/flume
   tag: ""
   pullPolicy: IfNotPresent
 
-service:
-  type: ClusterIP
-  httpPort: 8080
-  forwardPort: 24224
+collector:
+  logDir: /var/log/containers
+  bufferSize: 10000
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  tolerations: []
+  nodeSelector: {}
 
-flume:
-  maxMessages: 10000
-  bulkWindowMs: 100
-  verbose: false
-  s3:
-    bucket: ""
-    prefix: ""
-    region: ""
-    endpoint: ""
-    flushInterval: "10s"
-    flushCount: 1000
-    partitionLabel: ""
-    retention: ""
+aggregator:
+  replicas: 1
+  port: 8080
+  grpcPort: 9090
+  maxMessages: 50000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+s3:
+  enabled: false
+  bucket: ""
+  prefix: flume
+  region: ""
+  endpoint: ""
+  flushInterval: 10s
+  flushCount: 1000
+  retention: 168h
+
+patterns:
+  - name: all
+    selector:
+      matchLabels: {}
 
 serviceAccount:
-  # Set to true to create a ServiceAccount for the pod.
-  # Useful for IRSA (IAM Roles for Service Accounts) on EKS.
   create: true
-  # Annotations to add to the service account (e.g. EKS IRSA role ARN).
-  annotations: {}
-  # Override the generated service account name. Defaults to the fullname.
   name: ""
+  annotations: {}
 
-resources:
-  limits:
-    cpu: 500m
-    memory: 256Mi
-  requests:
-    cpu: 100m
-    memory: 128Mi
+service:
+  type: ClusterIP
+  port: 80
 
-nodeSelector: {}
-
-tolerations: []
-
-affinity: {}
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  tls: []

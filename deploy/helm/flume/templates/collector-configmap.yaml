@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "flume.fullname" . }}-collector
+  labels:
+    {{- include "flume.labels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+data:
+  config.yaml: |
+    collector:
+      logDir: {{ .Values.collector.logDir }}
+      bufferSize: {{ .Values.collector.bufferSize }}
+      aggregator:
+        addr: {{ include "flume.fullname" . }}-aggregator:{{ .Values.aggregator.grpcPort }}
+      {{- if .Values.s3.enabled }}
+      s3:
+        bucket: {{ .Values.s3.bucket }}
+        prefix: {{ .Values.s3.prefix }}
+        region: {{ .Values.s3.region }}
+        {{- if .Values.s3.endpoint }}
+        endpoint: {{ .Values.s3.endpoint }}
+        {{- end }}
+        flushInterval: {{ .Values.s3.flushInterval }}
+        flushCount: {{ .Values.s3.flushCount }}
+        retention: {{ .Values.s3.retention }}
+      {{- end }}
+      patterns:
+        {{- toYaml .Values.patterns | nindent 8 }}

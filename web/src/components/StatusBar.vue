@@ -2,8 +2,10 @@
 import { computed } from 'vue'
 import { useConnectionStore } from '../stores/connection'
 import { useLogsStore } from '../stores/logs'
+import { usePatternsStore } from '../stores/patterns'
 const connectionStore = useConnectionStore()
 const logsStore = useLogsStore()
+const patternsStore = usePatternsStore()
 
 const statusLabel = computed(() => {
   switch (connectionStore.status) {
@@ -38,6 +40,10 @@ const bufferUsage = computed(() => {
     <div class="status-bar__divider"></div>
     <div class="status-bar__item">
       <span>Messages: {{ messageCount }}</span>
+    </div>
+    <div v-if="patternsStore.current" class="status-bar__divider"></div>
+    <div v-if="patternsStore.current" class="status-bar__item">
+      <span>Pattern: {{ patternsStore.current }}</span>
     </div>
     <div v-if="bufferUsage" class="status-bar__divider"></div>
     <div v-if="bufferUsage" class="status-bar__item">

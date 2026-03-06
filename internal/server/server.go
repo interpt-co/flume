@@ -18,13 +18,23 @@ type Server struct {
 type ServerOption func(*serverOptions)
 
 type serverOptions struct {
-	storage Storage
+	storage         Storage
+	crossNodeStore  CrossNodeStorage
+	s3Prefix        string
 }
 
 // WithStorage attaches a Storage backend for the /api/history endpoint.
 func WithStorage(s Storage) ServerOption {
 	return func(o *serverOptions) {
 		o.storage = s
+	}
+}
+
+// WithCrossNodeStorageOption attaches cross-node storage for aggregator history.
+func WithCrossNodeStorageOption(store CrossNodeStorage, prefix string) ServerOption {
+	return func(o *serverOptions) {
+		o.crossNodeStore = store
+		o.s3Prefix = prefix
 	}
 }
 
@@ -43,11 +53,18 @@ func NewServer(host string, port int, manager *ClientManager, opts ...ServerOpti
 	mux.HandleFunc("GET /api/status", manager.HandleStatus)
 	mux.HandleFunc("GET /api/client/load", manager.HandleLoadRange)
 	mux.HandleFunc("GET /api/labels", manager.HandleLabels)
+	mux.HandleFunc("GET /api/patterns", manager.HandlePatterns)
 
-	if so.storage != nil {
-		h := &HistoryHandler{storage: so.storage}
-		mux.HandleFunc("GET /api/history", h.HandleHistory)
+	// History endpoint — supports both standalone and aggregator modes.
+	h := &HistoryHandler{
+		storage: so.storage,
+		manager: manager,
 	}
+	if so.crossNodeStore != nil {
+		h.xnStore = so.crossNodeStore
+		h.s3Prefix = so.s3Prefix
+	}
+	mux.HandleFunc("GET /api/history", h.HandleHistory)
 
 	return &Server{
 		httpServer: &http.Server{

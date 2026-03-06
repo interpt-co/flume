@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/interpt-co/flume/internal/buffer"
 	"github.com/interpt-co/flume/internal/models"
+	"github.com/interpt-co/flume/internal/pattern"
 	"github.com/interpt-co/flume/internal/query"
 )
 
@@ -37,8 +39,10 @@ type wsMessage struct {
 
 // clientJoinedData is sent to the client upon connection.
 type clientJoinedData struct {
-	ClientID   string `json:"client_id"`
-	BufferSize int    `json:"buffer_size"`
+	ClientID       string   `json:"client_id"`
+	BufferSize     int      `json:"buffer_size"`
+	Patterns       []string `json:"patterns,omitempty"`
+	DefaultPattern string   `json:"default_pattern,omitempty"`
 }
 
 // logBulkData is a batch of log messages sent to the client.
@@ -63,6 +67,18 @@ type loadRangeData struct {
 	Count int `json:"count"`
 }
 
+// setPatternData is received from the client to switch patterns.
+type setPatternData struct {
+	Pattern string `json:"pattern"`
+}
+
+// patternChangedData is sent when a client switches patterns.
+type patternChangedData struct {
+	Pattern    string `json:"pattern"`
+	BufferSize int    `json:"buffer_size"`
+	BufferUsed int    `json:"buffer_used"`
+}
+
 // Client represents a single connected WebSocket client.
 type Client struct {
 	id          string
@@ -70,8 +86,9 @@ type Client struct {
 	manager     *ClientManager
 	send        chan models.LogMessage
 	status      string
+	pattern     string            // current pattern subscription (aggregator mode)
 	labelFilter map[string]string // nil = match all
-	mu          sync.Mutex        // guards status and labelFilter
+	mu          sync.Mutex        // guards status, pattern, and labelFilter
 	writeMu     sync.Mutex        // guards WebSocket writes
 }
 
@@ -83,6 +100,22 @@ func newClient(id string, conn *websocket.Conn, manager *ClientManager) *Client 
 		send:    make(chan models.LogMessage, sendBufferSize),
 		status:  StatusFollowing,
 	}
+}
+
+// subscribeToPattern subscribes the client to a named pattern.
+// Must be called before the client is registered with the manager.
+func (c *Client) subscribeToPattern(patternName string) {
+	if c.manager.registry == nil {
+		return
+	}
+	p := c.manager.registry.GetOrCreate(patternName)
+	sub := &pattern.Subscriber{
+		ID:   c.id,
+		Ch:   c.send,
+		Done: make(chan struct{}),
+	}
+	p.Subscribe(sub)
+	c.pattern = patternName
 }
 
 // Send enqueues a message for delivery. Non-blocking: drops the message
@@ -109,8 +142,7 @@ func (c *Client) Send(msg models.LogMessage) {
 }
 
 // readPump reads messages from the WebSocket connection. It handles
-// client commands (set_status, load_range, ping) and removes the client
-// when the connection is closed.
+// client commands and removes the client when the connection is closed.
 func (c *Client) readPump() {
 	defer func() {
 		c.manager.removeClient(c.id)
@@ -151,8 +183,11 @@ func (c *Client) readPump() {
 			if err := json.Unmarshal(msg.Data, &data); err != nil {
 				continue
 			}
-			messages := c.manager.ring.GetRange(data.Start, data.Count)
-			c.writeLogBulk(messages)
+			ring := c.currentRing()
+			if ring != nil {
+				messages := ring.GetRange(data.Start, data.Count)
+				c.writeLogBulk(messages)
+			}
 
 		case "set_filter":
 			var data setFilterData
@@ -167,10 +202,76 @@ func (c *Client) readPump() {
 			}
 			c.mu.Unlock()
 
+		case "set_pattern":
+			var data setPatternData
+			if err := json.Unmarshal(msg.Data, &data); err != nil {
+				continue
+			}
+			c.handleSetPattern(data.Pattern)
+
 		case "ping":
 			c.writeJSON(wsMessage{Type: "pong"})
 		}
 	}
+}
+
+// handleSetPattern switches the client to a new pattern.
+func (c *Client) handleSetPattern(patternName string) {
+	if c.manager.registry == nil {
+		return
+	}
+
+	c.mu.Lock()
+	oldPattern := c.pattern
+	c.mu.Unlock()
+
+	// Unsubscribe from old pattern.
+	if oldPattern != "" {
+		if p := c.manager.registry.Get(oldPattern); p != nil {
+			p.Unsubscribe(c.id)
+		}
+	}
+
+	// Subscribe to new pattern.
+	p := c.manager.registry.GetOrCreate(patternName)
+	sub := &pattern.Subscriber{
+		ID:   c.id,
+		Ch:   c.send,
+		Done: make(chan struct{}),
+	}
+	p.Subscribe(sub)
+
+	c.mu.Lock()
+	c.pattern = patternName
+	c.mu.Unlock()
+
+	// Notify client.
+	c.writeJSON(wsMessage{
+		Type: "pattern_changed",
+		Data: mustMarshal(patternChangedData{
+			Pattern:    patternName,
+			BufferSize: p.Ring().Cap(),
+			BufferUsed: p.Ring().Len(),
+		}),
+	})
+}
+
+// currentRing returns the ring buffer for the client's current context.
+// In aggregator mode, it's the pattern's ring. In standalone mode, it's
+// the manager's ring.
+func (c *Client) currentRing() *buffer.Ring[models.LogMessage] {
+	if c.manager.registry != nil {
+		c.mu.Lock()
+		pn := c.pattern
+		c.mu.Unlock()
+		if pn != "" {
+			if p := c.manager.registry.Get(pn); p != nil {
+				return p.Ring()
+			}
+		}
+		return nil
+	}
+	return c.manager.ring
 }
 
 // writePump batches messages from the send channel and flushes them to the
