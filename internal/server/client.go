@@ -119,8 +119,12 @@ func (c *Client) subscribeToPattern(patternName string) {
 			c.mu.Lock()
 			st := c.status
 			filter := c.labelFilter
+			pre := c.preFilter
 			c.mu.Unlock()
 			if st == StatusStopped {
+				return false
+			}
+			if len(pre) > 0 && !query.LabelMatcher(pre).Matches(msg) {
 				return false
 			}
 			if len(filter) > 0 {
@@ -139,9 +143,14 @@ func (c *Client) Send(msg models.LogMessage) {
 	c.mu.Lock()
 	st := c.status
 	filter := c.labelFilter
+	pre := c.preFilter
 	c.mu.Unlock()
 
 	if st == StatusStopped {
+		return
+	}
+
+	if len(pre) > 0 && !query.LabelMatcher(pre).Matches(msg) {
 		return
 	}
 
@@ -257,8 +266,12 @@ func (c *Client) handleSetPattern(patternName string) {
 			c.mu.Lock()
 			st := c.status
 			filter := c.labelFilter
+			pre := c.preFilter
 			c.mu.Unlock()
 			if st == StatusStopped {
+				return false
+			}
+			if len(pre) > 0 && !query.LabelMatcher(pre).Matches(msg) {
 				return false
 			}
 			if len(filter) > 0 {

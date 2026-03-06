@@ -420,6 +420,69 @@ func TestWebSocketPreFilter(t *testing.T) {
 	}
 }
 
+func TestPreFilterBlocksMessages(t *testing.T) {
+	mgr := newTestManager(1000)
+	ts := newTestHTTPServer(t, mgr)
+	defer ts.Close()
+
+	// Connect with pre-filter: only ns=prod.
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws?filter=ns:prod"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("failed to dial ws: %v", err)
+	}
+	defer conn.Close()
+	readWSMessage(t, conn, 2*time.Second) // consume client_joined
+
+	ch := make(chan models.LogMessage, 10)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go mgr.ConsumeLoop(ctx, ch)
+
+	// Send a message that matches the pre-filter.
+	ch <- models.LogMessage{
+		ID:      "match-1",
+		Content: "should arrive",
+		Source:  models.SourceStdin,
+		Labels:  map[string]string{"ns": "prod"},
+	}
+
+	// Send a message that does NOT match.
+	ch <- models.LogMessage{
+		ID:      "nomatch-1",
+		Content: "should not arrive",
+		Source:  models.SourceStdin,
+		Labels:  map[string]string{"ns": "staging"},
+	}
+
+	// Wait for flush.
+	msg := readWSMessage(t, conn, 500*time.Millisecond)
+	if msg.Type != "log_bulk" {
+		t.Fatalf("expected log_bulk, got %q", msg.Type)
+	}
+
+	var data logBulkData
+	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	for _, m := range data.Messages {
+		if m.ID == "nomatch-1" {
+			t.Error("received message that should have been blocked by pre-filter")
+		}
+	}
+
+	found := false
+	for _, m := range data.Messages {
+		if m.ID == "match-1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("did not receive message that matches pre-filter")
+	}
+}
+
 func TestLoadRange(t *testing.T) {
 	mgr := newTestManager(1000)
 	ts := newTestHTTPServer(t, mgr)
