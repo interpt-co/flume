@@ -1,14 +1,21 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useLabelsStore } from '../stores/labels'
+import { usePrefilterStore } from '../stores/prefilter'
 
 const labels = useLabelsStore()
+const prefilterStore = usePrefilterStore()
 
+const hasPrefilters = computed(() => Object.keys(prefilterStore.filters).length > 0)
 const hasLabels = computed(() => Object.keys(labels.availableLabels).length > 0)
 const hasActiveLabels = computed(() => Object.keys(labels.activeLabels).length > 0)
+const showBar = computed(() => hasPrefilters.value || hasLabels.value)
 
+// Exclude pre-filtered keys from the interactive label pills.
 const sortedKeys = computed(() =>
-  Object.keys(labels.availableLabels).sort()
+  Object.keys(labels.availableLabels)
+    .filter(k => !(k in prefilterStore.filters))
+    .sort()
 )
 
 function toggleLabel(key: string, value: string) {
@@ -21,8 +28,14 @@ function toggleLabel(key: string, value: string) {
 </script>
 
 <template>
-  <div v-if="hasLabels" class="label-filter">
+  <div v-if="showBar" class="label-filter">
     <div class="label-filter__pills">
+      <!-- Pre-filter scope badges (non-removable) -->
+      <template v-for="(val, key) in prefilterStore.filters" :key="`pre-${key}`">
+        <span class="label-filter__scope-badge">{{ key }}:{{ val }}</span>
+      </template>
+
+      <!-- Interactive label pills -->
       <template v-for="key in sortedKeys" :key="key">
         <div class="label-filter__group">
           <span class="label-filter__key">{{ key }}:</span>
@@ -77,6 +90,17 @@ function toggleLabel(key: string, value: string) {
   color: var(--flume-fg-muted);
   font-weight: 600;
   user-select: none;
+}
+
+.label-filter__scope-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background-color: var(--flume-accent);
+  color: var(--flume-bg);
+  font-weight: 600;
+  user-select: none;
+  opacity: 0.8;
 }
 
 .label-filter__pill {
