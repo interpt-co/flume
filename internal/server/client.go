@@ -39,10 +39,11 @@ type wsMessage struct {
 
 // clientJoinedData is sent to the client upon connection.
 type clientJoinedData struct {
-	ClientID       string   `json:"client_id"`
-	BufferSize     int      `json:"buffer_size"`
-	Patterns       []string `json:"patterns,omitempty"`
-	DefaultPattern string   `json:"default_pattern,omitempty"`
+	ClientID       string            `json:"client_id"`
+	BufferSize     int               `json:"buffer_size"`
+	Patterns       []string          `json:"patterns,omitempty"`
+	DefaultPattern string            `json:"default_pattern,omitempty"`
+	PreFilters     map[string]string `json:"pre_filters,omitempty"`
 }
 
 // logBulkData is a batch of log messages sent to the client.
