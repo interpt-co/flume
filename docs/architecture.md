@@ -20,7 +20,10 @@ graph TD
         cA -- gRPC --> agg[Aggregator Deployment]
         cB -- gRPC --> agg
         cC -- gRPC --> agg
-        agg -. read/write .-> s3[(S3 · optional)]
+        cA -. write .-> s3[(S3 · optional)]
+        cB -. write .-> s3
+        cC -. write .-> s3
+        agg -. read .-> s3
     end
 
     agg -- HTTP/WS --> browser[Browser Clients · Vue.js SPA]
