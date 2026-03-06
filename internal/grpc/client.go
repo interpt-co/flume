@@ -69,6 +69,7 @@ func (c *Client) Run(ctx context.Context, ch <-chan LogEntry) {
 func (c *Client) stream(ctx context.Context, ch <-chan LogEntry) error {
 	conn, err := grpc.NewClient(c.addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(grpc.ForceCodec(rawCodec{})),
 	)
 	if err != nil {
 		return err

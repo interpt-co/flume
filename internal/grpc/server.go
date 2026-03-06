@@ -32,6 +32,7 @@ func NewServer(ingester Ingester, tracker *Tracker) *Server {
 	}
 
 	gs := grpc.NewServer(
+		grpc.ForceServerCodec(rawCodec{}),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
 			Time:    30 * time.Second,
 			Timeout: 10 * time.Second,
@@ -142,6 +143,28 @@ func mustJSON(v interface{}) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b
 }
+
+// rawCodec is a gRPC codec that passes raw bytes for *json.RawMessage,
+// bypassing protobuf marshaling so we can use JSON-over-gRPC.
+type rawCodec struct{}
+
+func (rawCodec) Marshal(v interface{}) ([]byte, error) {
+	if raw, ok := v.(*json.RawMessage); ok {
+		return *raw, nil
+	}
+	return json.Marshal(v)
+}
+
+func (rawCodec) Unmarshal(data []byte, v interface{}) error {
+	if raw, ok := v.(*json.RawMessage); ok {
+		*raw = make(json.RawMessage, len(data))
+		copy(*raw, data)
+		return nil
+	}
+	return json.Unmarshal(data, v)
+}
+
+func (rawCodec) Name() string { return "json" }
 
 // collectorServiceDesc is a minimal gRPC service descriptor for our
 // JSON-encoded bidirectional streaming RPC.
