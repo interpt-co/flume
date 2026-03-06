@@ -30,30 +30,26 @@ Real-time Kubernetes log collector and aggregator. Collects container logs from 
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Kubernetes Cluster                                         │
-│                                                             │
-│  ┌────────────┐  ┌────────────┐  ┌────────────┐            │
-│  │  Node A     │  │  Node B     │  │  Node C     │          │
-│  │ ┌────────┐  │  │ ┌────────┐  │  │ ┌────────┐  │          │
-│  │ │Collector│  │  │ │Collector│  │  │ │Collector│  │          │
-│  │ └───┬────┘  │  │ └───┬────┘  │  │ └───┬────┘  │          │
-│  └─────┼───────┘  └─────┼───────┘  └─────┼───────┘          │
-│        │ gRPC           │ gRPC           │ gRPC              │
-│        └────────────────┼────────────────┘                   │
-│                         ▼                                    │
-│               ┌──────────────────┐      ┌─────────┐         │
-│               │    Aggregator     │─────▶│   S3    │         │
-│               │    Deployment     │      │(optional)│        │
-│               └────────┬─────────┘      └─────────┘         │
-│                        │ HTTP/WS                             │
-└────────────────────────┼─────────────────────────────────────┘
-                         ▼
-                ┌─────────────────┐
-                │  Browser Clients │
-                │   (Vue.js SPA)   │
-                └─────────────────┘
+```mermaid
+graph TD
+    subgraph cluster["Kubernetes Cluster"]
+        subgraph nodeA["Node A"]
+            cA[Collector]
+        end
+        subgraph nodeB["Node B"]
+            cB[Collector]
+        end
+        subgraph nodeC["Node C"]
+            cC[Collector]
+        end
+
+        cA -- gRPC --> agg[Aggregator Deployment]
+        cB -- gRPC --> agg
+        cC -- gRPC --> agg
+        agg -. read/write .-> s3[(S3 · optional)]
+    end
+
+    agg -- HTTP/WS --> browser[Browser Clients · Vue.js SPA]
 ```
 
 The **Collector** tails container log files, parses CRI format, assembles partial lines, enriches with pod labels, and streams batches to the Aggregator via gRPC.

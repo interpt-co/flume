@@ -4,31 +4,26 @@ Flume is a real-time Kubernetes log collector and aggregator. It runs as two com
 
 ## System Overview
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Kubernetes Cluster                                             │
-│                                                                 │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │   Node A      │  │   Node B      │  │   Node C      │        │
-│  │  ┌──────────┐ │  │  ┌──────────┐ │  │  ┌──────────┐ │        │
-│  │  │Collector │ │  │  │Collector │ │  │  │Collector │ │        │
-│  │  │DaemonSet │ │  │  │DaemonSet │ │  │  │DaemonSet │ │        │
-│  │  └────┬─────┘ │  │  └────┬─────┘ │  │  └────┬─────┘ │        │
-│  └───────┼───────┘  └───────┼───────┘  └───────┼───────┘        │
-│          │ gRPC              │ gRPC              │ gRPC           │
-│          └──────────────────┼──────────────────┘                │
-│                             ▼                                   │
-│                   ┌─────────────────┐       ┌─────────┐         │
-│                   │   Aggregator     │──────▶│   S3    │         │
-│                   │   Deployment     │       │(optional)│        │
-│                   └────────┬────────┘       └─────────┘         │
-│                            │ HTTP/WS                            │
-└────────────────────────────┼────────────────────────────────────┘
-                             ▼
-                    ┌─────────────────┐
-                    │  Browser Clients │
-                    │  (Vue.js SPA)    │
-                    └─────────────────┘
+```mermaid
+graph TD
+    subgraph cluster["Kubernetes Cluster"]
+        subgraph nodeA["Node A"]
+            cA[Collector DaemonSet]
+        end
+        subgraph nodeB["Node B"]
+            cB[Collector DaemonSet]
+        end
+        subgraph nodeC["Node C"]
+            cC[Collector DaemonSet]
+        end
+
+        cA -- gRPC --> agg[Aggregator Deployment]
+        cB -- gRPC --> agg
+        cC -- gRPC --> agg
+        agg -. read/write .-> s3[(S3 · optional)]
+    end
+
+    agg -- HTTP/WS --> browser[Browser Clients · Vue.js SPA]
 ```
 
 ## Components
@@ -80,18 +75,20 @@ The Aggregator receives log streams from all Collectors and serves them to brows
 
 ### Collector Pipeline
 
-```
-Log File → tail → CRI Parse → Assembler → Pipeline(Parse → Enrich) → Dispatcher
-                                                                        ├─→ Ring Buffer
-                                                                        ├─→ S3 Writer
-                                                                        └─→ gRPC Stream
+```mermaid
+graph LR
+    A[Log File] --> B[tail] --> C[CRI Parse] --> D[Assembler] --> E[Pipeline · Parse + Enrich] --> F[Dispatcher]
+    F --> G[Ring Buffer]
+    F --> H[S3 Writer]
+    F --> I[gRPC Stream]
 ```
 
 ### Aggregator Pipeline
 
-```
-gRPC Stream → Ingester → Pattern.Ingest() → Ring Buffer
-                                            └─→ Subscriber Fan-out → WebSocket Clients
+```mermaid
+graph LR
+    A[gRPC Stream] --> B[Ingester] --> C["Pattern.Ingest()"] --> D[Ring Buffer]
+    C --> E[Subscriber Fan-out] --> F[WebSocket Clients]
 ```
 
 ## Pattern System
