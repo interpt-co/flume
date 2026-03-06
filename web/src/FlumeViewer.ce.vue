@@ -570,6 +570,21 @@ function clearLabels() {
   send({ type: 'set_filter', data: { labels: {} } })
 }
 
+// Auto-load history when label filter leaves too few visible messages
+async function backfillForFilter() {
+  if (!props.baseUrl || isLoadingHistory.value) return
+  const hasActiveFilter = Object.keys(activeLabels.value).length > 0
+  if (!hasActiveFilter) return
+
+  while (filteredMessages.value.length < WINDOW_SIZE && canLoadMore.value && !isLoadingHistory.value) {
+    await loadMoreHistory()
+  }
+}
+
+watch(activeLabels, () => {
+  backfillForFilter()
+}, { deep: true })
+
 // ---- Scroll / auto-follow ------------------------------------------------
 
 const logContainer = ref<HTMLElement | null>(null)
@@ -643,8 +658,18 @@ watch(
   () => messages.value.length,
   async () => {
     if (localAutoFollow.value) {
-      if (messages.value.length > 600) {
-        trimToWindow()
+      const hasActiveFilter = Object.keys(activeLabels.value).length > 0
+      const threshold = hasActiveFilter ? MAX_MESSAGES + 100 : 600
+      if (messages.value.length > threshold) {
+        if (hasActiveFilter) {
+          // Trim to MAX_MESSAGES when filter is active (keep more for filtering)
+          const excess = messages.value.length - MAX_MESSAGES
+          const removed = messages.value.slice(0, excess)
+          messages.value = messages.value.slice(excess)
+          for (const m of removed) seenIds.delete(m.id)
+        } else {
+          trimToWindow()
+        }
       }
       await nextTick()
       scrollToBottom()
