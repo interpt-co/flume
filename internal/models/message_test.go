@@ -105,11 +105,9 @@ func TestSourceTypeConstants(t *testing.T) {
 		st   SourceType
 		want string
 	}{
-		{SourceLoki, "loki"},
+		{SourceContainer, "container"},
 		{SourceStdin, "stdin"},
 		{SourceFile, "file"},
-		{SourceSocket, "socket"},
-		{SourceDemo, "demo"},
 	}
 	for _, tc := range cases {
 		if string(tc.st) != tc.want {

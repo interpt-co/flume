@@ -101,18 +101,20 @@ func newClient(id string, conn *websocket.Conn, manager *ClientManager) *Client 
 }
 
 // subscribeToPatternRedis subscribes the client to a Redis-backed pattern.
+// Must be called with c.mu held or from a context where no concurrent calls can occur.
 func (c *Client) subscribeToPatternRedis(patternName string) {
 	if c.manager.redisSubscriber == nil {
 		return
 	}
 
+	c.mu.Lock()
 	if c.redisCancel != nil {
 		c.redisCancel()
 	}
-
 	ctx, cancel := context.WithCancel(c.connCtx)
 	c.redisCancel = cancel
 	c.pattern = patternName
+	c.mu.Unlock()
 
 	ch := c.manager.redisSubscriber.Subscribe(ctx, patternName)
 
@@ -295,12 +297,18 @@ func (c *Client) readPump() {
 func (c *Client) handleSetPatternRedis(patternName string) {
 	c.subscribeToPatternRedis(patternName)
 
-	stats, _ := c.manager.redisReader.GetStats(c.connCtx, patternName)
-	count, _ := c.manager.redisReader.GetMessageCount(c.connCtx, patternName)
+	stats, err := c.manager.redisReader.GetStats(c.connCtx, patternName)
+	if err != nil {
+		log.WithError(err).WithField("pattern", patternName).Warn("handleSetPatternRedis: GetStats error")
+	}
+	count, err := c.manager.redisReader.GetMessageCount(c.connCtx, patternName)
+	if err != nil {
+		log.WithError(err).WithField("pattern", patternName).Warn("handleSetPatternRedis: GetMessageCount error")
+	}
 
 	c.writeJSON(wsMessage{
 		Type: "pattern_changed",
-		Data: mustMarshal(patternChangedData{
+		Data: safeJSON(patternChangedData{
 			Pattern:    patternName,
 			BufferSize: int(stats.BufferCapacity),
 			BufferUsed: int(count),
@@ -341,7 +349,7 @@ func (c *Client) writePump() {
 		case <-ticker.C:
 			if len(batch) > 0 {
 				c.writeLogBulk(batch)
-				batch = nil
+				batch = batch[:0]
 			}
 
 		case <-pingTicker.C:
@@ -364,7 +372,7 @@ func (c *Client) writeLogBulk(messages []models.LogMessage) {
 	}
 	c.writeJSON(wsMessage{
 		Type: "log_bulk",
-		Data: mustMarshal(data),
+		Data: safeJSON(data),
 	})
 }
 
@@ -375,10 +383,11 @@ func (c *Client) writeJSON(msg wsMessage) error {
 	return c.conn.WriteJSON(msg)
 }
 
-func mustMarshal(v interface{}) json.RawMessage {
+func safeJSON(v interface{}) json.RawMessage {
 	b, err := json.Marshal(v)
 	if err != nil {
-		panic("server: failed to marshal: " + err.Error())
+		log.WithError(err).Error("server: failed to marshal JSON")
+		return json.RawMessage(`{}`)
 	}
 	return b
 }

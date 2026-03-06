@@ -24,9 +24,14 @@ type Config struct {
 
 // RedisRef holds the Redis connection info.
 type RedisRef struct {
-	Addr     string `yaml:"addr"`
-	Password string `yaml:"password"`
-	DB       int    `yaml:"db"`
+	Addr          string `yaml:"addr"`
+	Password      string `yaml:"password"`
+	DB            int    `yaml:"db"`
+	UseTLS        bool   `yaml:"useTLS"`
+	TLSCertFile   string `yaml:"tlsCertFile"`
+	TLSKeyFile    string `yaml:"tlsKeyFile"`
+	TLSCACertFile string `yaml:"tlsCACertFile"`
+	TLSSkipVerify bool   `yaml:"tlsSkipVerify"`
 }
 
 // S3Ref holds S3 configuration for the collector.

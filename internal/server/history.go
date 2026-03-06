@@ -109,6 +109,9 @@ func (h *HistoryHandler) unifiedHistory(ctx context.Context, patternName string,
 		}
 	}
 
+	if len(result) > count {
+		result = result[:count]
+	}
 	return result
 }
 

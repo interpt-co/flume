@@ -1,10 +1,5 @@
 package pattern
 
-// PatternsConfig is the top-level structure for pattern configuration.
-type PatternsConfig struct {
-	Patterns []PatternDef `yaml:"patterns" json:"patterns"`
-}
-
 // PatternDef defines a single named pattern with a label selector.
 type PatternDef struct {
 	Name     string   `yaml:"name" json:"name"`

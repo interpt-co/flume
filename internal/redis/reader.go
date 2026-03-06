@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -69,10 +70,18 @@ func (r *Reader) GetStats(ctx context.Context, pattern string) (PatternStats, er
 	}
 	var stats PatternStats
 	if v, ok := vals["message_count"]; ok {
-		stats.MessageCount, _ = strconv.ParseInt(v, 10, 64)
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return PatternStats{}, fmt.Errorf("parsing message_count %q: %w", v, err)
+		}
+		stats.MessageCount = n
 	}
 	if v, ok := vals["buffer_capacity"]; ok {
-		stats.BufferCapacity, _ = strconv.ParseInt(v, 10, 64)
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return PatternStats{}, fmt.Errorf("parsing buffer_capacity %q: %w", v, err)
+		}
+		stats.BufferCapacity = n
 	}
 	return stats, nil
 }

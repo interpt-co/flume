@@ -16,9 +16,10 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "flume",
-	Short: "Kubernetes log collector and dispatcher",
-	Long:  "flume collects container logs from Kubernetes nodes, writes to Redis, and serves them to browser clients via WebSocket.",
+	Use:           "flume",
+	Short:         "Kubernetes log collector and dispatcher",
+	Long:          "flume collects container logs from Kubernetes nodes, writes to Redis, and serves them to browser clients via WebSocket.",
+	SilenceErrors: true,
 }
 
 var collectorCmd = &cobra.Command{
@@ -61,6 +62,13 @@ var dispatcherCmd = &cobra.Command{
 			S3Prefix:      getStringFlag(cmd, "s3-prefix", "FLUME_S3_PREFIX", ""),
 			S3Region:      getStringFlag(cmd, "s3-region", "FLUME_S3_REGION", ""),
 			S3Endpoint:    getStringFlag(cmd, "s3-endpoint", "FLUME_S3_ENDPOINT", ""),
+
+			// Redis TLS.
+			RedisUseTLS:        getBoolFlag(cmd, "redis-tls", "FLUME_REDIS_TLS", false),
+			RedisTLSCertFile:   getStringFlag(cmd, "redis-tls-cert", "FLUME_REDIS_TLS_CERT", ""),
+			RedisTLSKeyFile:    getStringFlag(cmd, "redis-tls-key", "FLUME_REDIS_TLS_KEY", ""),
+			RedisTLSCACertFile: getStringFlag(cmd, "redis-tls-ca-cert", "FLUME_REDIS_TLS_CA_CERT", ""),
+			RedisTLSSkipVerify: getBoolFlag(cmd, "redis-tls-skip-verify", "FLUME_REDIS_TLS_SKIP_VERIFY", false),
 		}
 
 		cfg.AuthURL = getStringFlag(cmd, "auth-url", "FLUME_AUTH_URL", "")
@@ -85,6 +93,11 @@ func init() {
 	dispatcherCmd.Flags().String("redis-addr", "localhost:6379", "Redis address")
 	dispatcherCmd.Flags().String("redis-password", "", "Redis password")
 	dispatcherCmd.Flags().Int("redis-db", 0, "Redis database number")
+	dispatcherCmd.Flags().Bool("redis-tls", false, "Enable TLS for Redis connection")
+	dispatcherCmd.Flags().String("redis-tls-cert", "", "Redis TLS client certificate file")
+	dispatcherCmd.Flags().String("redis-tls-key", "", "Redis TLS client key file")
+	dispatcherCmd.Flags().String("redis-tls-ca-cert", "", "Redis TLS CA certificate file")
+	dispatcherCmd.Flags().Bool("redis-tls-skip-verify", false, "Skip Redis TLS certificate verification")
 	dispatcherCmd.Flags().String("s3-bucket", "", "S3 bucket for log history (read-only)")
 	dispatcherCmd.Flags().String("s3-prefix", "", "S3 key prefix")
 	dispatcherCmd.Flags().String("s3-region", "", "AWS region")
@@ -105,6 +118,7 @@ func getIntFlag(cmd *cobra.Command, flag, envVar string, fallback int) int {
 		if v, err := strconv.Atoi(env); err == nil {
 			return v
 		}
+		fmt.Fprintf(os.Stderr, "warning: invalid integer in %s: %q, using default %d\n", envVar, env, fallback)
 	}
 	return fallback
 }
@@ -147,6 +161,7 @@ func getBoolFlag(cmd *cobra.Command, flag, envVar string, fallback bool) bool {
 		if err == nil {
 			return v
 		}
+		fmt.Fprintf(os.Stderr, "warning: invalid boolean in %s: %q, using default %v\n", envVar, env, fallback)
 	}
 	return fallback
 }

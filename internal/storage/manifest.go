@@ -183,7 +183,7 @@ func manifestMatchesFilter(meta ChunkMeta, filter map[string]string) bool {
 		}
 		found := false
 		for _, cv := range chunkVals {
-			if strings.EqualFold(cv, v) {
+			if cv == v {
 				found = true
 				break
 			}

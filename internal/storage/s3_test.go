@@ -196,7 +196,7 @@ func TestMarshalUnmarshalGzip_RoundTrip(t *testing.T) {
 			JsonContent: json.RawMessage(`{"key":"val"}`),
 			IsJson:      true,
 			Timestamp:   now.Add(-2 * time.Second),
-			Source:      models.SourceLoki,
+			Source:      models.SourceContainer,
 			Origin:      models.Origin{Name: "loki", Meta: map[string]string{"job": "app"}},
 			Labels:      map[string]string{"env": "prod"},
 			Level:       "error",
