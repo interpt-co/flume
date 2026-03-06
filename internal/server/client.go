@@ -1,35 +1,27 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/interpt-co/flume/internal/buffer"
+	log "github.com/sirupsen/logrus"
+
 	"github.com/interpt-co/flume/internal/models"
-	"github.com/interpt-co/flume/internal/pattern"
 	"github.com/interpt-co/flume/internal/query"
 )
 
 const (
-	// StatusFollowing means the client receives live log messages.
 	StatusFollowing = "following"
-	// StatusStopped means the client has paused live message delivery.
-	StatusStopped = "stopped"
+	StatusStopped   = "stopped"
 
-	// sendBufferSize is the capacity of the per-client send channel.
 	sendBufferSize = 256
-
-	// writeWait is the time allowed to write a message to the peer.
-	writeWait = 10 * time.Second
-
-	// pongWait is the time allowed to read the next pong message.
-	pongWait = 60 * time.Second
-
-	// pingInterval must be less than pongWait.
-	pingInterval = (pongWait * 9) / 10
+	writeWait      = 10 * time.Second
+	pongWait       = 60 * time.Second
+	pingInterval   = (pongWait * 9) / 10
 )
 
 // wsMessage represents a message exchanged over the WebSocket.
@@ -53,28 +45,23 @@ type logBulkData struct {
 	Total    uint64              `json:"total"`
 }
 
-// setStatusData is received from the client to change status.
 type setStatusData struct {
 	Status string `json:"status"`
 }
 
-// setFilterData is received from the client to set label filters.
 type setFilterData struct {
 	Labels map[string]string `json:"labels"`
 }
 
-// loadRangeData is received from the client to request buffered messages.
 type loadRangeData struct {
 	Start int `json:"start"`
 	Count int `json:"count"`
 }
 
-// setPatternData is received from the client to switch patterns.
 type setPatternData struct {
 	Pattern string `json:"pattern"`
 }
 
-// patternChangedData is sent when a client switches patterns.
 type patternChangedData struct {
 	Pattern    string `json:"pattern"`
 	BufferSize int    `json:"buffer_size"`
@@ -87,14 +74,15 @@ type Client struct {
 	conn        *websocket.Conn
 	manager     *ClientManager
 	send        chan models.LogMessage
-	closed      atomic.Bool        // true after send channel is closed
+	closed      atomic.Bool
 	status      string
-	pattern     string            // current pattern subscription (aggregator mode)
-	labelFilter map[string]string // nil = match all (user-changeable)
-	preFilter   map[string]string // nil = no pre-filter (immutable, set on connect)
-	mu          sync.Mutex        // guards status, pattern, labelFilter, and preFilter reads
-	writeMu     sync.Mutex        // guards WebSocket writes
-	closeOnce   sync.Once         // ensures conn.Close is called exactly once
+	pattern     string
+	labelFilter map[string]string
+	preFilter   map[string]string
+	redisCancel context.CancelFunc
+	mu          sync.Mutex
+	writeMu     sync.Mutex
+	closeOnce   sync.Once
 }
 
 func newClient(id string, conn *websocket.Conn, manager *ClientManager) *Client {
@@ -107,41 +95,62 @@ func newClient(id string, conn *websocket.Conn, manager *ClientManager) *Client 
 	}
 }
 
-// subscribeToPattern subscribes the client to a named pattern.
-// Must be called before the client is registered with the manager.
-func (c *Client) subscribeToPattern(patternName string) {
-	if c.manager.registry == nil {
+// subscribeToPatternRedis subscribes the client to a Redis-backed pattern.
+func (c *Client) subscribeToPatternRedis(patternName string) {
+	if c.manager.redisSubscriber == nil {
 		return
 	}
-	p := c.manager.registry.GetOrCreate(patternName)
-	sub := &pattern.Subscriber{
-		ID:   c.id,
-		Ch:   c.send,
-		Done: make(chan struct{}),
-		Filter: func(msg models.LogMessage) bool {
-			c.mu.Lock()
-			st := c.status
-			filter := c.labelFilter
-			pre := c.preFilter
-			c.mu.Unlock()
-			if st == StatusStopped {
-				return false
-			}
-			if len(pre) > 0 && !query.LabelMatcher(pre).Matches(msg) {
-				return false
-			}
-			if len(filter) > 0 {
-				return query.LabelMatcher(filter).Matches(msg)
-			}
-			return true
-		},
+
+	if c.redisCancel != nil {
+		c.redisCancel()
 	}
-	p.Subscribe(sub)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c.redisCancel = cancel
 	c.pattern = patternName
+
+	ch := c.manager.redisSubscriber.Subscribe(ctx, patternName)
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case batch, ok := <-ch:
+				if !ok {
+					return
+				}
+				for _, msg := range batch {
+					if c.closed.Load() {
+						return
+					}
+					c.mu.Lock()
+					st := c.status
+					pre := c.preFilter
+					filter := c.labelFilter
+					c.mu.Unlock()
+
+					if st == StatusStopped {
+						continue
+					}
+					if len(pre) > 0 && !query.LabelMatcher(pre).Matches(msg) {
+						continue
+					}
+					if len(filter) > 0 && !query.LabelMatcher(filter).Matches(msg) {
+						continue
+					}
+
+					select {
+					case c.send <- msg:
+					default:
+					}
+				}
+			}
+		}
+	}()
 }
 
-// Send enqueues a message for delivery. Non-blocking: drops the message
-// if the client's send buffer is full. Applies label filter if set.
+// Send enqueues a message for delivery. Non-blocking.
 func (c *Client) Send(msg models.LogMessage) {
 	if c.closed.Load() {
 		return
@@ -156,11 +165,9 @@ func (c *Client) Send(msg models.LogMessage) {
 	if st == StatusStopped {
 		return
 	}
-
 	if len(pre) > 0 && !query.LabelMatcher(pre).Matches(msg) {
 		return
 	}
-
 	if len(filter) > 0 && !query.LabelMatcher(filter).Matches(msg) {
 		return
 	}
@@ -168,12 +175,10 @@ func (c *Client) Send(msg models.LogMessage) {
 	select {
 	case c.send <- msg:
 	default:
-		// drop message if buffer is full
 	}
 }
 
-// readPump reads messages from the WebSocket connection. It handles
-// client commands and removes the client when the connection is closed.
+// readPump reads messages from the WebSocket connection.
 func (c *Client) readPump() {
 	defer func() {
 		c.manager.removeClient(c.id)
@@ -214,13 +219,17 @@ func (c *Client) readPump() {
 			if err := json.Unmarshal(msg.Data, &data); err != nil {
 				continue
 			}
-			ring := c.currentRing()
-			if ring != nil {
-				messages := ring.GetRange(data.Start, data.Count)
-				c.mu.Lock()
-				pre := c.preFilter
-				filter := c.labelFilter
-				c.mu.Unlock()
+			c.mu.Lock()
+			pn := c.pattern
+			pre := c.preFilter
+			filter := c.labelFilter
+			c.mu.Unlock()
+			if pn != "" {
+				messages, err := c.manager.redisReader.GetMessages(context.Background(), pn, data.Start, data.Count)
+				if err != nil {
+					log.WithError(err).Warn("load_range: redis read error")
+					continue
+				}
 				if len(pre) > 0 || len(filter) > 0 {
 					filtered := make([]models.LogMessage, 0, len(messages))
 					for _, m := range messages {
@@ -243,7 +252,6 @@ func (c *Client) readPump() {
 				continue
 			}
 			c.mu.Lock()
-			// Strip pre-filtered keys to prevent conflicting state.
 			for k := range c.preFilter {
 				delete(data.Labels, k)
 			}
@@ -259,7 +267,7 @@ func (c *Client) readPump() {
 			if err := json.Unmarshal(msg.Data, &data); err != nil {
 				continue
 			}
-			c.handleSetPattern(data.Pattern)
+			c.handleSetPatternRedis(data.Pattern)
 
 		case "ping":
 			c.writeJSON(wsMessage{Type: "pong"})
@@ -267,80 +275,21 @@ func (c *Client) readPump() {
 	}
 }
 
-// handleSetPattern switches the client to a new pattern.
-func (c *Client) handleSetPattern(patternName string) {
-	if c.manager.registry == nil {
-		return
-	}
+// handleSetPatternRedis switches the client to a new pattern using Redis.
+func (c *Client) handleSetPatternRedis(patternName string) {
+	c.subscribeToPatternRedis(patternName)
 
-	c.mu.Lock()
-	oldPattern := c.pattern
-	c.mu.Unlock()
+	stats, _ := c.manager.redisReader.GetStats(context.Background(), patternName)
+	count, _ := c.manager.redisReader.GetMessageCount(context.Background(), patternName)
 
-	// Unsubscribe from old pattern.
-	if oldPattern != "" {
-		if p := c.manager.registry.Get(oldPattern); p != nil {
-			p.Unsubscribe(c.id)
-		}
-	}
-
-	// Subscribe to new pattern.
-	p := c.manager.registry.GetOrCreate(patternName)
-	sub := &pattern.Subscriber{
-		ID:   c.id,
-		Ch:   c.send,
-		Done: make(chan struct{}),
-		Filter: func(msg models.LogMessage) bool {
-			c.mu.Lock()
-			st := c.status
-			filter := c.labelFilter
-			pre := c.preFilter
-			c.mu.Unlock()
-			if st == StatusStopped {
-				return false
-			}
-			if len(pre) > 0 && !query.LabelMatcher(pre).Matches(msg) {
-				return false
-			}
-			if len(filter) > 0 {
-				return query.LabelMatcher(filter).Matches(msg)
-			}
-			return true
-		},
-	}
-	p.Subscribe(sub)
-
-	c.mu.Lock()
-	c.pattern = patternName
-	c.mu.Unlock()
-
-	// Notify client.
 	c.writeJSON(wsMessage{
 		Type: "pattern_changed",
 		Data: mustMarshal(patternChangedData{
 			Pattern:    patternName,
-			BufferSize: p.Ring().Cap(),
-			BufferUsed: p.Ring().Len(),
+			BufferSize: int(stats.BufferCapacity),
+			BufferUsed: int(count),
 		}),
 	})
-}
-
-// currentRing returns the ring buffer for the client's current context.
-// In aggregator mode, it's the pattern's ring. In standalone mode, it's
-// the manager's ring.
-func (c *Client) currentRing() *buffer.Ring[models.LogMessage] {
-	if c.manager.registry != nil {
-		c.mu.Lock()
-		pn := c.pattern
-		c.mu.Unlock()
-		if pn != "" {
-			if p := c.manager.registry.Get(pn); p != nil {
-				return p.Ring()
-			}
-		}
-		return nil
-	}
-	return c.manager.ring
 }
 
 // writePump batches messages from the send channel and flushes them to the
@@ -362,7 +311,6 @@ func (c *Client) writePump() {
 		select {
 		case msg, ok := <-c.send:
 			if !ok {
-				// Channel closed — manager removed us.
 				c.writeMu.Lock()
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				c.writeMu.Unlock()
@@ -388,7 +336,6 @@ func (c *Client) writePump() {
 	}
 }
 
-// writeLogBulk sends a log_bulk message with the given messages.
 func (c *Client) writeLogBulk(messages []models.LogMessage) {
 	total := c.manager.MessageCount()
 	data := logBulkData{
@@ -401,7 +348,6 @@ func (c *Client) writeLogBulk(messages []models.LogMessage) {
 	})
 }
 
-// writeJSON sends a JSON message to the WebSocket. Thread-safe via writeMu.
 func (c *Client) writeJSON(msg wsMessage) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -409,8 +355,6 @@ func (c *Client) writeJSON(msg wsMessage) error {
 	return c.conn.WriteJSON(msg)
 }
 
-// mustMarshal marshals v to json.RawMessage, panicking on error (should never happen
-// with known types).
 func mustMarshal(v interface{}) json.RawMessage {
 	b, err := json.Marshal(v)
 	if err != nil {

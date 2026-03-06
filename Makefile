@@ -3,7 +3,7 @@ BUILD_DIR   := bin
 FRONTEND_DIST := web/dist
 EMBED_DIST  := internal/server/dist
 
-.PHONY: build build-frontend build-backend build-collector build-aggregator dev test clean lint proto-gen
+.PHONY: build build-frontend build-backend build-collector build-dispatcher dev test clean lint
 
 build: build-frontend build-backend
 
@@ -18,11 +18,11 @@ build-backend:
 build-collector:
 	CGO_ENABLED=0 go build -o $(BUILD_DIR)/$(BINARY_NAME)-collector ./cmd/flume
 
-build-aggregator:
-	CGO_ENABLED=0 go build -o $(BUILD_DIR)/$(BINARY_NAME)-aggregator ./cmd/flume
+build-dispatcher:
+	CGO_ENABLED=0 go build -o $(BUILD_DIR)/$(BINARY_NAME)-dispatcher ./cmd/flume
 
-dev-aggregator:
-	go run ./cmd/flume aggregator --verbose
+dev-dispatcher:
+	go run ./cmd/flume dispatcher --verbose --redis-addr localhost:6379
 
 dev-collector:
 	go run ./cmd/flume collector --config test-config.yaml --verbose
@@ -38,8 +38,3 @@ clean:
 lint:
 	go vet ./...
 	golangci-lint run ./...
-
-proto-gen:
-	protoc --go_out=. --go_opt=paths=source_relative \
-		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
-		api/proto/flume/v1/collector.proto

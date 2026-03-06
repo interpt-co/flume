@@ -10,20 +10,19 @@ import (
 	"github.com/paulofilip3/pipeline"
 	log "github.com/sirupsen/logrus"
 
-	"github.com/interpt-co/flume/internal/buffer"
 	"github.com/interpt-co/flume/internal/collector/cri"
 	"github.com/interpt-co/flume/internal/collector/discovery"
 	"github.com/interpt-co/flume/internal/collector/fanout"
 	"github.com/interpt-co/flume/internal/collector/podwatch"
-	flumegrpc "github.com/interpt-co/flume/internal/grpc"
 	"github.com/interpt-co/flume/internal/models"
 	"github.com/interpt-co/flume/internal/processing"
+	flumeredis "github.com/interpt-co/flume/internal/redis"
 	"github.com/interpt-co/flume/internal/storage"
 )
 
 // Collector is the DaemonSet component that collects container logs from the
 // local node, enriches them with K8s metadata, and dispatches to per-pattern
-// ring buffers, S3, and gRPC streams.
+// Redis sorted sets and S3 storage.
 type Collector struct {
 	cfg      *Config
 	nodeName string
@@ -75,14 +74,26 @@ func (c *Collector) Run(ctx context.Context) error {
 		}
 	}()
 
-	// 2. Create per-pattern resources.
+	// 2. Create Redis writer (if configured).
+	var redisWriter *flumeredis.Writer
+	if c.cfg.Redis.Addr != "" {
+		redisClient := flumeredis.NewClient(flumeredis.Config{
+			Addr:     c.cfg.Redis.Addr,
+			Password: c.cfg.Redis.Password,
+			DB:       c.cfg.Redis.DB,
+		})
+		if err := redisClient.Ping(ctx); err != nil {
+			return fmt.Errorf("redis ping: %w", err)
+		}
+		redisWriter = flumeredis.NewWriter(redisClient)
+		log.WithField("addr", c.cfg.Redis.Addr).Info("collector: connected to Redis")
+	}
+
+	// 3. Create per-pattern resources.
 	var dests []fanout.Destination
 	for _, pDef := range c.cfg.Patterns {
-		ring := buffer.NewRing[models.LogMessage](c.cfg.BufferSize)
-
 		dest := fanout.Destination{
 			Pattern: pDef,
-			Ring:    ring.Push,
 		}
 
 		// S3 writer per pattern.
@@ -109,23 +120,11 @@ func (c *Collector) Run(ctx context.Context) error {
 			dest.S3 = s3store.Writer()
 		}
 
-		// gRPC channel per pattern.
-		if c.cfg.Aggregator.Addr != "" {
-			grpcCh := make(chan models.LogMessage, 1000)
-			dest.GRPC = grpcCh
-
-			client := flumegrpc.NewClient(c.cfg.Aggregator.Addr, c.nodeName, pDef.Name)
-			go func(ch <-chan models.LogMessage) {
-				// Convert models.LogMessage to flumegrpc.LogEntry for the client.
-				entryCh := make(chan flumegrpc.LogEntry, 1000)
-				go func() {
-					defer close(entryCh)
-					for msg := range ch {
-						entryCh <- flumegrpc.LogEntryFromMessage(msg)
-					}
-				}()
-				client.Run(ctx, entryCh)
-			}(grpcCh)
+		// Redis channel per pattern.
+		if redisWriter != nil {
+			redisCh := make(chan models.LogMessage, 1000)
+			dest.Redis = redisCh
+			go redisBatcher(ctx, pDef.Name, redisCh, redisWriter, c.cfg.BufferSize)
 		}
 
 		dests = append(dests, dest)
@@ -133,13 +132,13 @@ func (c *Collector) Run(ctx context.Context) error {
 
 	dispatcher := fanout.NewDispatcher(dests)
 
-	// 3. Start file discovery watcher.
+	// 4. Start file discovery watcher.
 	fileEvents, err := discovery.WatchDir(ctx, c.cfg.LogDir)
 	if err != nil {
 		return fmt.Errorf("watching %s: %w", c.cfg.LogDir, err)
 	}
 
-	// 4. Merged channel for all tailer output.
+	// 5. Merged channel for all tailer output.
 	merged := make(chan models.LogMessage, 4096)
 	assembler := cri.NewAssembler()
 
@@ -149,7 +148,7 @@ func (c *Collector) Run(ctx context.Context) error {
 	}
 	tailers := make(map[string]tailerCancel)
 
-	// 5. Handle file events.
+	// 6. Handle file events.
 	go func() {
 		for {
 			select {
@@ -178,7 +177,7 @@ func (c *Collector) Run(ctx context.Context) error {
 		}
 	}()
 
-	// 6. Build processing pipeline.
+	// 7. Build processing pipeline.
 	stages := []pipeline.Stage[models.LogMessage]{
 		{Name: "parse", Worker: processing.ParseWorker, Concurrency: 1},
 		{Name: "enrich", Worker: processing.EnrichWorker, Concurrency: 1},
@@ -191,14 +190,14 @@ func (c *Collector) Run(ctx context.Context) error {
 
 	pipeOut, errs := pipe.Run(ctx, merged)
 
-	// 7. Error drain.
+	// 8. Error drain.
 	go func() {
 		for err := range errs {
 			log.WithError(err).Warn("collector: pipeline error")
 		}
 	}()
 
-	// 8. Dispatch pipeline output.
+	// 9. Dispatch pipeline output.
 	for msg := range pipeOut {
 		dispatcher.Dispatch(msg)
 	}

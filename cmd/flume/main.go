@@ -11,20 +11,20 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/interpt-co/flume/internal/aggregator"
 	"github.com/interpt-co/flume/internal/collector"
+	"github.com/interpt-co/flume/internal/dispatcher"
 )
 
 var rootCmd = &cobra.Command{
 	Use:   "flume",
-	Short: "Kubernetes log collector and aggregator",
-	Long:  "flume collects container logs from Kubernetes nodes and serves them to browser clients via WebSocket.",
+	Short: "Kubernetes log collector and dispatcher",
+	Long:  "flume collects container logs from Kubernetes nodes, writes to Redis, and serves them to browser clients via WebSocket.",
 }
 
 var collectorCmd = &cobra.Command{
 	Use:   "collector",
 	Short: "Run the DaemonSet log collector",
-	Long:  "Collects container logs from /var/log/containers/, enriches with K8s metadata, and streams to the aggregator.",
+	Long:  "Collects container logs from /var/log/containers/, enriches with K8s metadata, and writes to Redis.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		configPath, _ := cmd.Flags().GetString("config")
 		cfg, err := collector.LoadConfig(configPath)
@@ -44,22 +44,23 @@ var collectorCmd = &cobra.Command{
 	},
 }
 
-var aggregatorCmd = &cobra.Command{
-	Use:   "aggregator",
-	Short: "Run the central log aggregator",
-	Long:  "Receives log streams from collectors via gRPC and serves them to browser clients.",
+var dispatcherCmd = &cobra.Command{
+	Use:   "dispatcher",
+	Short: "Run the client-facing log dispatcher",
+	Long:  "Reads logs from Redis and serves them to browser clients via HTTP/WebSocket. Horizontally scalable.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg := aggregator.Config{
-			Host:         getStringFlag(cmd, "host", "FLUME_HOST", "0.0.0.0"),
-			Port:         getIntFlag(cmd, "port", "FLUME_PORT", 8080),
-			GRPCPort:     getIntFlag(cmd, "grpc-port", "FLUME_GRPC_PORT", 9090),
-			BufferSize:   getIntFlag(cmd, "max-messages", "FLUME_MAX_MESSAGES", 10000),
-			BulkWindowMS: getIntFlag(cmd, "bulk-window-ms", "FLUME_BULK_WINDOW_MS", 100),
-			Verbose:      getBoolFlag(cmd, "verbose", "FLUME_VERBOSE", false),
-			S3Bucket:     getStringFlag(cmd, "s3-bucket", "FLUME_S3_BUCKET", ""),
-			S3Prefix:     getStringFlag(cmd, "s3-prefix", "FLUME_S3_PREFIX", ""),
-			S3Region:     getStringFlag(cmd, "s3-region", "FLUME_S3_REGION", ""),
-			S3Endpoint:   getStringFlag(cmd, "s3-endpoint", "FLUME_S3_ENDPOINT", ""),
+		cfg := dispatcher.Config{
+			Host:          getStringFlag(cmd, "host", "FLUME_HOST", "0.0.0.0"),
+			Port:          getIntFlag(cmd, "port", "FLUME_PORT", 8080),
+			BulkWindowMS:  getIntFlag(cmd, "bulk-window-ms", "FLUME_BULK_WINDOW_MS", 100),
+			Verbose:       getBoolFlag(cmd, "verbose", "FLUME_VERBOSE", false),
+			RedisAddr:     getStringFlag(cmd, "redis-addr", "FLUME_REDIS_ADDR", "localhost:6379"),
+			RedisPassword: getStringFlag(cmd, "redis-password", "FLUME_REDIS_PASSWORD", ""),
+			RedisDB:       getIntFlag(cmd, "redis-db", "FLUME_REDIS_DB", 0),
+			S3Bucket:      getStringFlag(cmd, "s3-bucket", "FLUME_S3_BUCKET", ""),
+			S3Prefix:      getStringFlag(cmd, "s3-prefix", "FLUME_S3_PREFIX", ""),
+			S3Region:      getStringFlag(cmd, "s3-region", "FLUME_S3_REGION", ""),
+			S3Endpoint:    getStringFlag(cmd, "s3-endpoint", "FLUME_S3_ENDPOINT", ""),
 		}
 
 		cfg.AuthURL = getStringFlag(cmd, "auth-url", "FLUME_AUTH_URL", "")
@@ -68,7 +69,7 @@ var aggregatorCmd = &cobra.Command{
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		return aggregator.New(cfg).Run(ctx)
+		return dispatcher.New(cfg).Run(ctx)
 	},
 }
 
@@ -79,20 +80,21 @@ func init() {
 	// Collector flags.
 	collectorCmd.Flags().String("config", "/etc/flume/config.yaml", "Path to collector config YAML")
 
-	// Aggregator flags.
-	aggregatorCmd.Flags().Int("port", 8080, "HTTP server port")
-	aggregatorCmd.Flags().String("host", "0.0.0.0", "HTTP server bind address")
-	aggregatorCmd.Flags().Int("grpc-port", 9090, "gRPC server port")
-	aggregatorCmd.Flags().Int("max-messages", 10000, "Per-pattern ring buffer capacity")
-	aggregatorCmd.Flags().Int("bulk-window-ms", 100, "WebSocket flush interval in milliseconds")
-	aggregatorCmd.Flags().String("s3-bucket", "", "S3 bucket for log history (read-only)")
-	aggregatorCmd.Flags().String("s3-prefix", "", "S3 key prefix")
-	aggregatorCmd.Flags().String("s3-region", "", "AWS region")
-	aggregatorCmd.Flags().String("s3-endpoint", "", "Custom S3 endpoint (MinIO, localstack)")
-	aggregatorCmd.Flags().String("auth-url", "", "Auth callback URL (POST) for WebSocket upgrade authorization")
-	aggregatorCmd.Flags().String("auth-timeout", "5s", "Timeout for auth callback requests")
+	// Dispatcher flags.
+	dispatcherCmd.Flags().Int("port", 8080, "HTTP server port")
+	dispatcherCmd.Flags().String("host", "0.0.0.0", "HTTP server bind address")
+	dispatcherCmd.Flags().Int("bulk-window-ms", 100, "WebSocket flush interval in milliseconds")
+	dispatcherCmd.Flags().String("redis-addr", "localhost:6379", "Redis address")
+	dispatcherCmd.Flags().String("redis-password", "", "Redis password")
+	dispatcherCmd.Flags().Int("redis-db", 0, "Redis database number")
+	dispatcherCmd.Flags().String("s3-bucket", "", "S3 bucket for log history (read-only)")
+	dispatcherCmd.Flags().String("s3-prefix", "", "S3 key prefix")
+	dispatcherCmd.Flags().String("s3-region", "", "AWS region")
+	dispatcherCmd.Flags().String("s3-endpoint", "", "Custom S3 endpoint (MinIO, localstack)")
+	dispatcherCmd.Flags().String("auth-url", "", "Auth callback URL (POST) for WebSocket upgrade authorization")
+	dispatcherCmd.Flags().String("auth-timeout", "5s", "Timeout for auth callback requests")
 
-	rootCmd.AddCommand(collectorCmd, aggregatorCmd)
+	rootCmd.AddCommand(collectorCmd, dispatcherCmd)
 }
 
 func getIntFlag(cmd *cobra.Command, flag, envVar string, fallback int) int {

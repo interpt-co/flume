@@ -1,10 +1,10 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "flume.fullname" . }}-aggregator
+  name: {{ include "flume.fullname" . }}-dispatcher
   labels:
     {{- include "flume.labels" . | nindent 4 }}
-    app.kubernetes.io/component: aggregator
+    app.kubernetes.io/component: dispatcher
 spec:
   type: {{ .Values.service.type }}
   ports:
@@ -12,10 +12,6 @@ spec:
       port: {{ .Values.service.port }}
       targetPort: http
       protocol: TCP
-    - name: grpc
-      port: {{ .Values.aggregator.grpcPort }}
-      targetPort: grpc
-      protocol: TCP
   selector:
     {{- include "flume.selectorLabels" . | nindent 4 }}
-    app.kubernetes.io/component: aggregator
+    app.kubernetes.io/component: dispatcher

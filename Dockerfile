@@ -36,6 +36,6 @@ RUN apk add --no-cache ca-certificates
 
 COPY --from=go-builder /flume /flume
 
-EXPOSE 8080 24224
+EXPOSE 8080
 
 ENTRYPOINT ["/flume"]

@@ -4,6 +4,7 @@
 
 - Kubernetes cluster (1.24+)
 - Helm 3
+- Redis (standalone or cluster)
 - (Optional) S3-compatible storage for log persistence
 
 ## Helm Installation
@@ -11,7 +12,8 @@
 ```bash
 helm install flume deploy/helm/flume \
   --namespace flume \
-  --create-namespace
+  --create-namespace \
+  --set redis.addr=redis:6379
 ```
 
 ## Configuration
@@ -23,23 +25,29 @@ All configuration is done via Helm values. See `deploy/helm/flume/values.yaml` f
 | Value | Default | Description |
 |-------|---------|-------------|
 | `collector.logDir` | `/var/log/containers` | Directory to watch for container log files |
-| `collector.bufferSize` | `10000` | Per-pattern ring buffer capacity |
+| `collector.bufferSize` | `10000` | Buffer size for log batching |
 | `collector.resources` | `50m/64Mi` | CPU/memory requests |
 | `collector.tolerations` | `[]` | Kubernetes tolerations for scheduling on all nodes |
 | `collector.nodeSelector` | `{}` | Node selector constraints |
 
-### Aggregator Settings
+### Dispatcher Settings
 
 | Value | Default | Description |
 |-------|---------|-------------|
-| `aggregator.replicas` | `1` | Number of aggregator replicas |
-| `aggregator.port` | `8080` | HTTP server port |
-| `aggregator.grpcPort` | `9090` | gRPC server port (collectors connect here) |
-| `aggregator.maxMessages` | `50000` | Per-pattern ring buffer capacity |
-| `aggregator.bulkWindowMS` | `100` | WebSocket flush interval (ms) |
-| `aggregator.verbose` | `false` | Enable debug logging |
-| `aggregator.authUrl` | `""` | Auth callback URL for WebSocket authorization |
-| `aggregator.authTimeout` | `5s` | Timeout for auth callback requests |
+| `dispatcher.replicas` | `2` | Number of dispatcher replicas |
+| `dispatcher.port` | `8080` | HTTP server port |
+| `dispatcher.bulkWindowMS` | `100` | WebSocket flush interval (ms) |
+| `dispatcher.verbose` | `false` | Enable debug logging |
+| `dispatcher.authUrl` | `""` | Auth callback URL for WebSocket authorization |
+| `dispatcher.authTimeout` | `5s` | Timeout for auth callback requests |
+
+### Redis Settings
+
+| Value | Default | Description |
+|-------|---------|-------------|
+| `redis.addr` | `redis:6379` | Redis address |
+| `redis.password` | `""` | Redis password |
+| `redis.db` | `""` | Redis database number |
 
 ### S3 Storage
 
@@ -56,7 +64,7 @@ All configuration is done via Helm values. See `deploy/helm/flume/values.yaml` f
 
 ### Patterns
 
-Patterns define label-based routing rules. Each pattern gets its own ring buffer and S3 partition.
+Patterns define label-based routing rules. Each pattern gets its own Redis sorted set and S3 partition.
 
 ```yaml
 patterns:
@@ -97,26 +105,27 @@ ingress:
 
 ## CLI Usage
 
-### Aggregator
+### Dispatcher
 
 ```bash
-flume aggregator [flags]
+flume dispatcher [flags]
 ```
 
-| Flag | Env Var | Default | Description |
-|------|---------|---------|-------------|
-| `--host` | `FLUME_HOST` | `0.0.0.0` | Bind address |
-| `--port` | `FLUME_PORT` | `8080` | HTTP port |
-| `--grpc-port` | `FLUME_GRPC_PORT` | `9090` | gRPC port |
-| `--max-messages` | `FLUME_MAX_MESSAGES` | `10000` | Ring buffer capacity |
-| `--bulk-window-ms` | `FLUME_BULK_WINDOW_MS` | `100` | WebSocket flush interval (ms) |
-| `--s3-bucket` | `FLUME_S3_BUCKET` | | S3 bucket for history |
-| `--s3-prefix` | `FLUME_S3_PREFIX` | | S3 key prefix |
-| `--s3-region` | `FLUME_S3_REGION` | | AWS region |
-| `--s3-endpoint` | `FLUME_S3_ENDPOINT` | | Custom S3 endpoint |
-| `--auth-url` | `FLUME_AUTH_URL` | | Auth callback URL |
-| `--auth-timeout` | `FLUME_AUTH_TIMEOUT` | `5s` | Auth callback timeout |
-| `--verbose` | `FLUME_VERBOSE` | `false` | Debug logging |
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--host` | `0.0.0.0` | Bind address |
+| `--port` | `8080` | HTTP port |
+| `--redis-addr` | `localhost:6379` | Redis address |
+| `--redis-password` | | Redis password |
+| `--redis-db` | `0` | Redis database number |
+| `--bulk-window-ms` | `100` | WebSocket flush interval (ms) |
+| `--s3-bucket` | | S3 bucket for history |
+| `--s3-prefix` | | S3 key prefix |
+| `--s3-region` | | AWS region |
+| `--s3-endpoint` | | Custom S3 endpoint |
+| `--auth-url` | | Auth callback URL |
+| `--auth-timeout` | `5s` | Auth callback timeout |
+| `--verbose` | `false` | Debug logging |
 
 ### Collector
 
@@ -137,8 +146,10 @@ collector:
   bufferSize: 10000
   verbose: false
 
-  aggregator:
-    addr: flume-aggregator:9090
+  redis:
+    addr: redis:6379
+    password: ""
+    db: 0
 
   patterns:
     - name: all
@@ -202,10 +213,10 @@ Pre-filtered keys are excluded from the label filter dropdown in the UI and cann
 
 ## Resource Sizing
 
-| Deployment | Log Volume | Buffer Size | Memory |
-|------------|-----------|-------------|--------|
-| Small | < 100 msgs/s | 10,000 | 128Mi |
-| Medium | 100-1000 msgs/s | 50,000 | 512Mi |
-| Large | 1000+ msgs/s | 100,000 | 1Gi+ |
+| Deployment | Log Volume | Dispatcher Replicas | Memory (per replica) |
+|------------|-----------|---------------------|----------------------|
+| Small | < 100 msgs/s | 1 | 128Mi |
+| Medium | 100-1000 msgs/s | 2 | 256Mi |
+| Large | 1000+ msgs/s | 3+ | 512Mi |
 
-S3 storage grows at approximately 1 KB per log message (gzip compressed).
+Redis memory depends on buffer capacity (configurable per pattern). S3 storage grows at approximately 1 KB per log message (gzip compressed).

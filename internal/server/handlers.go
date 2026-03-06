@@ -5,43 +5,47 @@ import (
 	"net/http"
 	"strconv"
 
+	log "github.com/sirupsen/logrus"
+
 	"github.com/interpt-co/flume/internal/models"
 	"github.com/interpt-co/flume/internal/query"
 )
 
 // HandleStatus writes the current server status as JSON.
-// In aggregator mode, accepts optional ?pattern= to return pattern-scoped stats.
+// Accepts optional ?pattern= to return pattern-scoped stats.
 func (m *ClientManager) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	info := m.Status()
 
-	// In aggregator mode, override buffer stats with pattern-scoped data.
-	if m.registry != nil {
-		patternName := r.URL.Query().Get("pattern")
-		if patternName == "" {
-			names := m.registry.Names()
-			if len(names) > 0 {
-				patternName = names[0]
-			}
+	patternName := r.URL.Query().Get("pattern")
+	if patternName == "" {
+		patterns, _ := m.redisReader.GetPatterns(r.Context())
+		if len(patterns) > 0 {
+			patternName = patterns[0]
 		}
-		if patternName != "" {
-			if p := m.registry.Get(patternName); p != nil {
-				info.BufferUsed = p.Ring().Len()
-				info.BufferCapacity = p.Ring().Cap()
-			}
+	}
+	if patternName != "" {
+		stats, err := m.redisReader.GetStats(r.Context(), patternName)
+		if err == nil {
+			info.Messages = uint64(stats.MessageCount)
+			info.BufferCapacity = int(stats.BufferCapacity)
+		}
+		count, err := m.redisReader.GetMessageCount(r.Context(), patternName)
+		if err == nil {
+			info.BufferUsed = int(count)
 		}
 	}
 
 	json.NewEncoder(w).Encode(info)
 }
 
-// HandleLoadRange returns messages from the ring buffer.
+// HandleLoadRange returns messages from the Redis sorted set.
 // Query params: start (int, default 0), count (int, default 100), pattern (string, optional)
 func (m *ClientManager) HandleLoadRange(w http.ResponseWriter, r *http.Request) {
 	startStr := r.URL.Query().Get("start")
 	countStr := r.URL.Query().Get("count")
-	start, _ := strconv.Atoi(startStr) // defaults to 0 on parse error
+	start, _ := strconv.Atoi(startStr)
 	count, _ := strconv.Atoi(countStr)
 	if count <= 0 {
 		count = 100
@@ -50,26 +54,21 @@ func (m *ClientManager) HandleLoadRange(w http.ResponseWriter, r *http.Request) 
 		count = 1000
 	}
 
-	// In aggregator mode, use pattern-scoped ring buffer.
-	ring := m.ring
-	if m.registry != nil {
-		patternName := r.URL.Query().Get("pattern")
-		if patternName == "" {
-			names := m.registry.Names()
-			if len(names) > 0 {
-				patternName = names[0]
-			}
-		}
-		if patternName != "" {
-			if p := m.registry.Get(patternName); p != nil {
-				ring = p.Ring()
-			}
+	var msgs []models.LogMessage
+
+	patternName := r.URL.Query().Get("pattern")
+	if patternName == "" {
+		patterns, _ := m.redisReader.GetPatterns(r.Context())
+		if len(patterns) > 0 {
+			patternName = patterns[0]
 		}
 	}
-
-	var msgs []models.LogMessage
-	if ring != nil {
-		msgs = ring.GetRange(start, count)
+	if patternName != "" {
+		var err error
+		msgs, err = m.redisReader.GetMessages(r.Context(), patternName, start, count)
+		if err != nil {
+			log.WithError(err).Warn("HandleLoadRange: redis read error")
+		}
 	}
 
 	// Apply pre-filter if provided.
@@ -108,20 +107,35 @@ type PatternInfo struct {
 func (m *ClientManager) HandlePatterns(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	if m.registry == nil {
+	patterns, err := m.redisReader.GetPatterns(r.Context())
+	if err != nil {
 		json.NewEncoder(w).Encode([]PatternInfo{})
 		return
 	}
 
-	patterns := m.registry.All()
+	// Count local subscribers per pattern.
+	m.mu.RLock()
+	subCounts := make(map[string]int)
+	for _, c := range m.clients {
+		c.mu.Lock()
+		pn := c.pattern
+		c.mu.Unlock()
+		if pn != "" {
+			subCounts[pn]++
+		}
+	}
+	m.mu.RUnlock()
+
 	result := make([]PatternInfo, 0, len(patterns))
-	for name, p := range patterns {
+	for _, name := range patterns {
+		stats, _ := m.redisReader.GetStats(r.Context(), name)
+		count, _ := m.redisReader.GetMessageCount(r.Context(), name)
 		result = append(result, PatternInfo{
 			Name:            name,
-			BufferUsed:      p.Ring().Len(),
-			BufferCapacity:  p.Ring().Cap(),
-			MessageCount:    p.MessageCount(),
-			SubscriberCount: p.SubscriberCount(),
+			BufferUsed:      int(count),
+			BufferCapacity:  int(stats.BufferCapacity),
+			MessageCount:    uint64(stats.MessageCount),
+			SubscriberCount: subCounts[name],
 		})
 	}
 	json.NewEncoder(w).Encode(result)

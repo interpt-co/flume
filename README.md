@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Docker](https://img.shields.io/docker/v/interpt/flume?label=docker&logo=docker)](https://hub.docker.com/r/interpt/flume)
 
-Real-time Kubernetes log collector and aggregator. Collects container logs from every node, routes them through label-based patterns, and serves them to browser clients via WebSocket — with optional S3 persistence and automatic retention.
+Real-time Kubernetes log collector and dispatcher. Collects container logs from every node, writes them to Redis, and serves them to browser clients via horizontally scalable Dispatcher instances — with optional S3 persistence and automatic retention.
 
 | Light | Dark |
 |-------|------|
@@ -13,7 +13,9 @@ Real-time Kubernetes log collector and aggregator. Collects container logs from 
 
 ## Features
 
-- **Kubernetes native** — Collector DaemonSet on every node, central Aggregator Deployment
+- **Kubernetes native** — Collector DaemonSet on every node, scalable Dispatcher Deployment
+- **Redis-backed** — sorted sets for timestamp-ordered buffering, pub/sub for live dispatch
+- **Horizontally scalable** — run multiple Dispatcher replicas behind a load balancer
 - **CRI log parsing** — reads `/var/log/containers/` directly, handles partial lines and log rotation
 - **Pod label enrichment** — automatically fetches labels from the Kubernetes API
 - **Pattern-based routing** — define label selectors to group logs into independent streams
@@ -24,9 +26,7 @@ Real-time Kubernetes log collector and aggregator. Collects container logs from 
 - **S3 persistence** — time-partitioned gzipped JSON storage with per-hour manifests
 - **Automatic retention** — configure a TTL and Flume deletes expired S3 data hourly
 - **JSON detection** — structured log lines are parsed and rendered as collapsible JSON trees
-- **Ring buffer** — configurable in-memory history per pattern; scroll up to load older entries
 - **Single binary** — frontend embedded via `go:embed`, deploy one container
-- **gRPC transport** — collectors stream logs to the aggregator over bidirectional gRPC
 
 ## Architecture
 
@@ -43,28 +43,37 @@ graph TD
             cC[Collector]
         end
 
-        cA -- gRPC --> agg[Aggregator Deployment]
-        cB -- gRPC --> agg
-        cC -- gRPC --> agg
+        cA -- "ZADD + PUBLISH" --> redis[(Redis)]
+        cB -- "ZADD + PUBLISH" --> redis
+        cC -- "ZADD + PUBLISH" --> redis
         cA -. write .-> s3[(S3 · optional)]
         cB -. write .-> s3
         cC -. write .-> s3
-        agg -. read .-> s3
+
+        redis -- "Subscribe + ZRANGE" --> dA[Dispatcher 1]
+        redis -- "Subscribe + ZRANGE" --> dB[Dispatcher 2]
+        s3 -. read .-> dA
+        s3 -. read .-> dB
     end
 
-    agg -- HTTP/WS --> browser[Browser Clients · Vue.js SPA]
+    dA -- HTTP/WS --> browser[Browser Clients · Vue.js SPA]
+    dB -- HTTP/WS --> browser
 ```
 
-The **Collector** tails container log files, parses CRI format, assembles partial lines, enriches with pod labels, and streams batches to the Aggregator via gRPC.
+The **Collector** tails container log files, parses CRI format, assembles partial lines, enriches with pod labels, and writes batches to Redis via an atomic Lua script.
 
-The **Aggregator** ingests logs into per-pattern ring buffers, fans out to WebSocket subscribers, serves the embedded Vue.js frontend, and optionally reads/writes S3 for history.
+The **Dispatcher** subscribes to Redis pub/sub for live messages, reads sorted sets for buffered history, serves the embedded Vue.js frontend, and optionally reads S3 for older data.
 
 ## Quick Start
 
 ### Docker
 
 ```bash
-docker run --rm -p 8080:8080 -p 9090:9090 interpt/flume:0.1.0 aggregator
+# Start Redis first
+docker run -d --name redis -p 6379:6379 redis:7-alpine
+
+# Start the dispatcher
+docker run --rm -p 8080:8080 --link redis interpt/flume:0.2.0 dispatcher --redis-addr redis:6379
 ```
 
 ### Helm
@@ -72,7 +81,8 @@ docker run --rm -p 8080:8080 -p 9090:9090 interpt/flume:0.1.0 aggregator
 ```bash
 helm install flume deploy/helm/flume \
   --namespace flume \
-  --create-namespace
+  --create-namespace \
+  --set redis.addr=redis:6379
 ```
 
 ### From Source
@@ -80,39 +90,40 @@ helm install flume deploy/helm/flume \
 ```bash
 git clone https://github.com/interpt-co/flume.git && cd flume
 make build
-./bin/flume aggregator --verbose
+./bin/flume dispatcher --verbose --redis-addr localhost:6379
 ```
 
 ## Usage
 
 Flume has two subcommands:
 
-### Aggregator
+### Dispatcher
 
-The central server that receives logs from collectors and serves the web UI.
+The scalable server that reads from Redis and serves the web UI.
 
 ```bash
-flume aggregator [flags]
+flume dispatcher [flags]
 ```
 
-| Flag | Env Var | Default | Description |
-|------|---------|---------|-------------|
-| `--host` | `FLUME_HOST` | `0.0.0.0` | Bind address |
-| `--port` | `FLUME_PORT` | `8080` | HTTP port |
-| `--grpc-port` | `FLUME_GRPC_PORT` | `9090` | gRPC port (collectors connect here) |
-| `--max-messages` | `FLUME_MAX_MESSAGES` | `10000` | Per-pattern ring buffer capacity |
-| `--bulk-window-ms` | `FLUME_BULK_WINDOW_MS` | `100` | WebSocket flush interval (ms) |
-| `--s3-bucket` | `FLUME_S3_BUCKET` | | S3 bucket for history |
-| `--s3-prefix` | `FLUME_S3_PREFIX` | | S3 key prefix |
-| `--s3-region` | `FLUME_S3_REGION` | | AWS region |
-| `--s3-endpoint` | `FLUME_S3_ENDPOINT` | | Custom S3 endpoint (MinIO) |
-| `--auth-url` | `FLUME_AUTH_URL` | | Auth callback URL |
-| `--auth-timeout` | `FLUME_AUTH_TIMEOUT` | `5s` | Auth callback timeout |
-| `--verbose` | `FLUME_VERBOSE` | `false` | Debug logging |
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--host` | `0.0.0.0` | Bind address |
+| `--port` | `8080` | HTTP port |
+| `--redis-addr` | `localhost:6379` | Redis address |
+| `--redis-password` | | Redis password |
+| `--redis-db` | `0` | Redis database number |
+| `--bulk-window-ms` | `100` | WebSocket flush interval (ms) |
+| `--s3-bucket` | | S3 bucket for history |
+| `--s3-prefix` | | S3 key prefix |
+| `--s3-region` | | AWS region |
+| `--s3-endpoint` | | Custom S3 endpoint (MinIO) |
+| `--auth-url` | | Auth callback URL |
+| `--auth-timeout` | `5s` | Auth callback timeout |
+| `--verbose` | `false` | Debug logging |
 
 ### Collector
 
-Runs as a DaemonSet on every node. Reads container logs and streams them to the aggregator.
+Runs as a DaemonSet on every node. Reads container logs and writes them to Redis.
 
 ```bash
 flume collector --config /etc/flume/config.yaml
@@ -126,8 +137,10 @@ collector:
   bufferSize: 10000
   verbose: false
 
-  aggregator:
-    addr: flume-aggregator:9090
+  redis:
+    addr: redis:6379
+    password: ""
+    db: 0
 
   patterns:
     - name: all
@@ -145,7 +158,7 @@ collector:
 
 ## Patterns
 
-Patterns are label-based routing rules. Each pattern gets its own ring buffer and S3 partition. A message matching multiple patterns is routed to all of them.
+Patterns are label-based routing rules. Each pattern gets its own Redis sorted set and S3 partition. A message matching multiple patterns is routed to all of them.
 
 ```yaml
 patterns:
@@ -165,6 +178,21 @@ patterns:
         env: production
 ```
 
+## Redis Data Model
+
+Per pattern `{p}` with key prefix `flume`:
+
+| Key | Type | Purpose |
+|-----|------|---------|
+| `flume:{p}:msgs` | Sorted Set | Ring buffer. Score = UnixNano timestamp. |
+| `flume:{p}:stream` | Pub/Sub channel | Live message batches for dispatchers. |
+| `flume:{p}:label_keys` | Set | Known label keys for this pattern. |
+| `flume:{p}:labels:{key}` | Set | Distinct values for a label key. |
+| `flume:{p}:stats` | Hash | `message_count`, `buffer_capacity`. |
+| `flume:patterns` | Set | All known pattern names. |
+
+Collectors write atomically via a Lua script: ZADD + trim + label index + stats + PUBLISH.
+
 ## S3 Persistence
 
 Enable on the collector with the `s3` config block. Logs are written as time-partitioned gzipped JSON chunks with per-hour manifest indexes.
@@ -174,7 +202,7 @@ Enable on the collector with the `s3` config block. Logs are written as time-par
 {prefix}/{node}/{pattern}/{YYYY}/{MM}/{DD}/{HH}/manifest.json
 ```
 
-The aggregator reads S3 for the `/api/history` endpoint, enabling infinite scroll-back in the UI.
+The dispatcher reads S3 for the `/api/history` endpoint, enabling infinite scroll-back in the UI.
 
 AWS credentials are resolved via the standard SDK chain (env vars, `~/.aws/credentials`, IRSA on EKS).
 
@@ -198,10 +226,10 @@ See [docs/deployment.md](docs/deployment.md) for details.
 |----------|-------------|
 | `GET /ws` | WebSocket for live log streaming |
 | `GET /api/status` | Server status and buffer stats |
-| `GET /api/labels` | Distinct label keys and values from the ring buffer |
+| `GET /api/labels` | Distinct label keys and values from Redis |
 | `GET /api/patterns` | Available patterns and their stats |
-| `GET /api/client/load` | Paginate the ring buffer |
-| `GET /api/history` | Historical messages (ring buffer + S3 fallback) |
+| `GET /api/client/load` | Paginate the Redis sorted set |
+| `GET /api/history` | Historical messages (Redis + S3 fallback) |
 
 See [docs/api-reference.md](docs/api-reference.md) for the full protocol reference.
 
@@ -211,7 +239,7 @@ See [docs/api-reference.md](docs/api-reference.md) for the full protocol referen
 make build              # Build frontend + backend → bin/flume
 make build-frontend     # Build frontend only
 make build-backend      # Build backend only
-make dev-aggregator     # Run aggregator in dev mode
+make dev-dispatcher     # Run dispatcher in dev mode (needs local Redis)
 make dev-collector      # Run collector with test config
 make test               # Run Go tests
 make lint               # go vet + golangci-lint
@@ -226,7 +254,7 @@ cd web && npm install && npm run dev
 ## Documentation
 
 - [Architecture](docs/architecture.md) — system overview, components, data flow
-- [API Reference](docs/api-reference.md) — REST endpoints, WebSocket protocol, gRPC protocol
+- [API Reference](docs/api-reference.md) — REST endpoints, WebSocket protocol
 - [Deployment](docs/deployment.md) — Helm chart, CLI reference, auth, sizing
 
 ## License

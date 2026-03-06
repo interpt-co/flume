@@ -1,36 +1,42 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "flume.fullname" . }}-aggregator
+  name: {{ include "flume.fullname" . }}-dispatcher
   labels:
     {{- include "flume.labels" . | nindent 4 }}
-    app.kubernetes.io/component: aggregator
+    app.kubernetes.io/component: dispatcher
 spec:
-  replicas: {{ .Values.aggregator.replicas }}
+  replicas: {{ .Values.dispatcher.replicas }}
   selector:
     matchLabels:
       {{- include "flume.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: aggregator
+      app.kubernetes.io/component: dispatcher
   template:
     metadata:
       labels:
         {{- include "flume.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: aggregator
+        app.kubernetes.io/component: dispatcher
     spec:
       containers:
-        - name: aggregator
+        - name: dispatcher
           image: "{{ .Values.image.repository }}:{{ include "flume.imageTag" . }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
-            - aggregator
+            - dispatcher
             - --port
-            - "{{ .Values.aggregator.port }}"
-            - --grpc-port
-            - "{{ .Values.aggregator.grpcPort }}"
-            - --max-messages
-            - "{{ .Values.aggregator.maxMessages }}"
+            - "{{ .Values.dispatcher.port }}"
+            - --redis-addr
+            - "{{ .Values.redis.addr }}"
+            {{- if .Values.redis.password }}
+            - --redis-password
+            - "{{ .Values.redis.password }}"
+            {{- end }}
+            {{- if .Values.redis.db }}
+            - --redis-db
+            - "{{ .Values.redis.db }}"
+            {{- end }}
             - --bulk-window-ms
-            - "{{ .Values.aggregator.bulkWindowMS }}"
+            - "{{ .Values.dispatcher.bulkWindowMS }}"
             {{- if .Values.s3.enabled }}
             - --s3-bucket
             - "{{ .Values.s3.bucket }}"
@@ -43,21 +49,18 @@ spec:
             - "{{ .Values.s3.endpoint }}"
             {{- end }}
             {{- end }}
-            {{- if .Values.aggregator.authUrl }}
+            {{- if .Values.dispatcher.authUrl }}
             - --auth-url
-            - "{{ .Values.aggregator.authUrl }}"
+            - "{{ .Values.dispatcher.authUrl }}"
             - --auth-timeout
-            - "{{ .Values.aggregator.authTimeout }}"
+            - "{{ .Values.dispatcher.authTimeout }}"
             {{- end }}
-            {{- if .Values.aggregator.verbose }}
+            {{- if .Values.dispatcher.verbose }}
             - --verbose
             {{- end }}
           ports:
             - name: http
-              containerPort: {{ .Values.aggregator.port }}
-              protocol: TCP
-            - name: grpc
-              containerPort: {{ .Values.aggregator.grpcPort }}
+              containerPort: {{ .Values.dispatcher.port }}
               protocol: TCP
           livenessProbe:
             httpGet:
@@ -71,7 +74,7 @@ spec:
               port: http
             initialDelaySeconds: 3
             periodSeconds: 5
-          {{- with .Values.aggregator.resources }}
+          {{- with .Values.dispatcher.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}

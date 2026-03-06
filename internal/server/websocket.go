@@ -1,17 +1,14 @@
 package server
 
 import (
-	"context"
 	"net/http"
 	"sync"
 	"sync/atomic"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"github.com/interpt-co/flume/internal/buffer"
-	"github.com/interpt-co/flume/internal/models"
-	"github.com/interpt-co/flume/internal/pattern"
 	"github.com/interpt-co/flume/internal/query"
+	flumeredis "github.com/interpt-co/flume/internal/redis"
 )
 
 // StatusInfo holds runtime status information.
@@ -23,41 +20,33 @@ type StatusInfo struct {
 }
 
 // ClientManager manages connected WebSocket clients and distributes log
-// messages received from the processing pipeline.
+// messages from Redis to browser clients.
 type ClientManager struct {
-	mu       sync.RWMutex
-	clients  map[string]*Client
-	ring     *buffer.Ring[models.LogMessage] // used in standalone mode
-	registry *pattern.Registry               // used in aggregator mode
-	bulkMS   int                             // flush interval in milliseconds
-	msgCount uint64                          // total messages received (atomic)
-	auth     *AuthConfig
+	mu              sync.RWMutex
+	clients         map[string]*Client
+	redisReader     *flumeredis.Reader
+	redisSubscriber *flumeredis.Subscriber
+	bulkMS          int    // flush interval in milliseconds
+	msgCount        uint64 // total messages received (atomic)
+	auth            *AuthConfig
 }
 
-// NewClientManager creates a new ClientManager backed by a single ring buffer.
-// bulkWindowMS controls how often batched messages are flushed to clients
-// (default: 100ms if zero).
-func NewClientManager(ring *buffer.Ring[models.LogMessage], bulkWindowMS int) *ClientManager {
+// NewClientManagerWithRedis creates a Redis-backed ClientManager for the dispatcher.
+func NewClientManagerWithRedis(reader *flumeredis.Reader, subscriber *flumeredis.Subscriber, bulkWindowMS int) *ClientManager {
 	if bulkWindowMS <= 0 {
 		bulkWindowMS = 100
 	}
 	return &ClientManager{
-		clients: make(map[string]*Client),
-		ring:    ring,
-		bulkMS:  bulkWindowMS,
+		clients:         make(map[string]*Client),
+		redisReader:     reader,
+		redisSubscriber: subscriber,
+		bulkMS:          bulkWindowMS,
 	}
 }
 
-// NewClientManagerWithRegistry creates a pattern-aware ClientManager for the aggregator.
-func NewClientManagerWithRegistry(registry *pattern.Registry, bulkWindowMS int) *ClientManager {
-	if bulkWindowMS <= 0 {
-		bulkWindowMS = 100
-	}
-	return &ClientManager{
-		clients:  make(map[string]*Client),
-		registry: registry,
-		bulkMS:   bulkWindowMS,
-	}
+// RedisReader returns the Redis reader.
+func (m *ClientManager) RedisReader() *flumeredis.Reader {
+	return m.redisReader
 }
 
 // SetAuthConfig sets the auth callback configuration for WebSocket upgrades.
@@ -95,16 +84,14 @@ func (m *ClientManager) HandleWS(w http.ResponseWriter, r *http.Request) {
 	c.preFilter = preFilter
 
 	// Subscribe to pattern: from query param, or default to first available.
-	if m.registry != nil {
-		if patternName == "" {
-			names := m.registry.Names()
-			if len(names) > 0 {
-				patternName = names[0]
-			}
+	if patternName == "" {
+		patterns, _ := m.redisReader.GetPatterns(r.Context())
+		if len(patterns) > 0 {
+			patternName = patterns[0]
 		}
-		if patternName != "" {
-			c.subscribeToPattern(patternName)
-		}
+	}
+	if patternName != "" {
+		c.subscribeToPatternRedis(patternName)
 	}
 
 	m.mu.Lock()
@@ -114,16 +101,14 @@ func (m *ClientManager) HandleWS(w http.ResponseWriter, r *http.Request) {
 	// Build client_joined data.
 	joined := clientJoinedData{
 		ClientID:   id,
-		BufferSize: m.bufferCap(),
 		PreFilters: c.preFilter,
 	}
-	if m.registry != nil {
-		joined.Patterns = m.registry.Names()
-		if c.pattern != "" {
-			joined.DefaultPattern = c.pattern
-		} else if len(joined.Patterns) > 0 {
-			joined.DefaultPattern = joined.Patterns[0]
-		}
+	patterns, _ := m.redisReader.GetPatterns(r.Context())
+	joined.Patterns = patterns
+	if c.pattern != "" {
+		joined.DefaultPattern = c.pattern
+	} else if len(patterns) > 0 {
+		joined.DefaultPattern = patterns[0]
 	}
 
 	c.writeJSON(wsMessage{
@@ -140,45 +125,14 @@ func (m *ClientManager) removeClient(id string) {
 	m.mu.Lock()
 	c, ok := m.clients[id]
 	if ok {
-		// Read pattern under c.mu to avoid race with handleSetPattern.
-		c.mu.Lock()
-		pat := c.pattern
-		c.mu.Unlock()
-
-		// Unsubscribe from pattern if subscribed.
-		if pat != "" && m.registry != nil {
-			if p := m.registry.Get(pat); p != nil {
-				p.Unsubscribe(id)
-			}
+		if c.redisCancel != nil {
+			c.redisCancel()
 		}
 		c.closed.Store(true)
 		close(c.send)
 		delete(m.clients, id)
 	}
 	m.mu.Unlock()
-}
-
-// ConsumeLoop reads messages from the pipeline output channel and distributes
-// them to all connected clients. Used in standalone mode (not aggregator).
-// It blocks until ctx is cancelled or the messages channel is closed.
-func (m *ClientManager) ConsumeLoop(ctx context.Context, messages <-chan models.LogMessage) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case msg, ok := <-messages:
-			if !ok {
-				return
-			}
-			atomic.AddUint64(&m.msgCount, 1)
-
-			m.mu.RLock()
-			for _, c := range m.clients {
-				c.Send(msg)
-			}
-			m.mu.RUnlock()
-		}
-	}
 }
 
 // MessageCount returns the total number of messages received.
@@ -193,30 +147,7 @@ func (m *ClientManager) Status() StatusInfo {
 	m.mu.RUnlock()
 
 	return StatusInfo{
-		Clients:        clientCount,
-		Messages:       m.MessageCount(),
-		BufferUsed:     m.bufferLen(),
-		BufferCapacity: m.bufferCap(),
+		Clients:  clientCount,
+		Messages: m.MessageCount(),
 	}
-}
-
-// bufferCap returns the ring buffer capacity (standalone or first pattern).
-func (m *ClientManager) bufferCap() int {
-	if m.ring != nil {
-		return m.ring.Cap()
-	}
-	return 0
-}
-
-// bufferLen returns the ring buffer usage (standalone mode).
-func (m *ClientManager) bufferLen() int {
-	if m.ring != nil {
-		return m.ring.Len()
-	}
-	return 0
-}
-
-// Registry returns the pattern registry, or nil in standalone mode.
-func (m *ClientManager) Registry() *pattern.Registry {
-	return m.registry
 }

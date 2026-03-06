@@ -27,7 +27,7 @@ spec:
             pathType: {{ .pathType | default "Prefix" }}
             backend:
               service:
-                name: {{ include "flume.fullname" $ }}-aggregator
+                name: {{ include "flume.fullname" $ }}-dispatcher
                 port:
                   name: http
           {{- end }}

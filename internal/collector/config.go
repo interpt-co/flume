@@ -14,7 +14,7 @@ type Config struct {
 	LogDir     string        `yaml:"logDir"`
 	BufferSize int           `yaml:"bufferSize"`
 	Verbose    bool          `yaml:"verbose"`
-	Aggregator AggregatorRef `yaml:"aggregator"`
+	Redis      RedisRef      `yaml:"redis"`
 	S3         S3Ref         `yaml:"s3"`
 	Patterns   []pattern.PatternDef `yaml:"patterns"`
 	// StaticLabels provides pod labels for local testing without K8s API.
@@ -22,9 +22,11 @@ type Config struct {
 	StaticLabels map[string]map[string]string `yaml:"staticLabels"`
 }
 
-// AggregatorRef holds the gRPC aggregator connection info.
-type AggregatorRef struct {
-	Addr string `yaml:"addr"`
+// RedisRef holds the Redis connection info.
+type RedisRef struct {
+	Addr     string `yaml:"addr"`
+	Password string `yaml:"password"`
+	DB       int    `yaml:"db"`
 }
 
 // S3Ref holds S3 configuration for the collector.

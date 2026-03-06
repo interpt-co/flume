@@ -10,8 +10,14 @@ data:
     collector:
       logDir: {{ .Values.collector.logDir }}
       bufferSize: {{ .Values.collector.bufferSize }}
-      aggregator:
-        addr: {{ include "flume.fullname" . }}-aggregator:{{ .Values.aggregator.grpcPort }}
+      redis:
+        addr: {{ .Values.redis.addr }}
+        {{- if .Values.redis.password }}
+        password: {{ .Values.redis.password }}
+        {{- end }}
+        {{- if .Values.redis.db }}
+        db: {{ .Values.redis.db }}
+        {{- end }}
       {{- if .Values.s3.enabled }}
       s3:
         bucket: {{ .Values.s3.bucket }}

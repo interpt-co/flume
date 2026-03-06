@@ -16,11 +16,9 @@ collector:
   tolerations: []
   nodeSelector: {}
 
-aggregator:
-  replicas: 1
+dispatcher:
+  replicas: 2
   port: 8080
-  grpcPort: 9090
-  maxMessages: 50000
   bulkWindowMS: 100
   verbose: false
   authUrl: ""
@@ -32,6 +30,11 @@ aggregator:
     limits:
       cpu: 500m
       memory: 512Mi
+
+redis:
+  addr: "redis:6379"
+  password: ""
+  db: ""
 
 s3:
   enabled: false

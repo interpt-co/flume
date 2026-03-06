@@ -11,8 +11,8 @@ import (
 type Destination struct {
 	Pattern pattern.PatternDef
 	Ring    func(models.LogMessage) // push to ring buffer
-	S3     chan<- models.LogMessage // per-pattern S3 storage writer
-	GRPC   chan<- models.LogMessage // per-pattern gRPC stream
+	S3    chan<- models.LogMessage // per-pattern S3 storage writer
+	Redis chan<- models.LogMessage // per-pattern Redis writer
 }
 
 // Dispatcher evaluates each message against all pattern selectors and sends
@@ -50,9 +50,9 @@ func (d *Dispatcher) Dispatch(msg models.LogMessage) {
 			}
 		}
 
-		if dest.GRPC != nil {
+		if dest.Redis != nil {
 			select {
-			case dest.GRPC <- msg:
+			case dest.Redis <- msg:
 			default: // non-blocking
 			}
 		}

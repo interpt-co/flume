@@ -2,7 +2,7 @@
 
 ## REST Endpoints
 
-All endpoints are served by the Aggregator on the configured HTTP port (default `8080`).
+All endpoints are served by the Dispatcher on the configured HTTP port (default `8080`).
 
 ---
 
@@ -14,7 +14,7 @@ Returns current server status.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `pattern` | string | Pattern name for scoped stats (aggregator mode). Defaults to first pattern. |
+| `pattern` | string | Pattern name for scoped stats. Defaults to first pattern. |
 
 **Response:**
 
@@ -31,7 +31,7 @@ Returns current server status.
 
 ### `GET /api/client/load`
 
-Returns a range of messages from the ring buffer.
+Returns a range of messages from the Redis sorted set.
 
 **Query Parameters:**
 
@@ -39,7 +39,7 @@ Returns a range of messages from the ring buffer.
 |-----------|------|---------|-------------|
 | `start` | int | `0` | Logical index (0 = oldest) |
 | `count` | int | `100` | Number of messages (max 1000) |
-| `pattern` | string | first pattern | Pattern name (aggregator mode) |
+| `pattern` | string | first pattern | Pattern name |
 | `filter` | string | | Pre-filter labels, e.g. `namespace:prod,app:web` |
 
 **Response:**
@@ -73,13 +73,13 @@ Returns a range of messages from the ring buffer.
 
 ### `GET /api/labels`
 
-Returns distinct label keys and their values from the ring buffer.
+Returns distinct label keys and their values from Redis.
 
 **Query Parameters:**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `pattern` | string | Pattern name (aggregator mode). Defaults to first pattern. |
+| `pattern` | string | Pattern name. Defaults to first pattern. |
 | `filter` | string | Pre-filter labels to exclude from the response. |
 
 **Response:**
@@ -124,7 +124,7 @@ Returns available patterns and their stats.
 
 ### `GET /api/history`
 
-Returns historical log messages, reading from the ring buffer first and falling back to S3 for older data.
+Returns historical log messages, reading from Redis first and falling back to S3 for older data.
 
 **Query Parameters:**
 
@@ -134,7 +134,7 @@ Returns historical log messages, reading from the ring buffer first and falling 
 | `count` | int | `500` | Number of messages (max 1000) |
 | `labels` | string | | Label filter, e.g. `level:error,namespace:prod` |
 | `filter` | string | | Pre-filter labels (merged into label filter) |
-| `pattern` | string | | Pattern name (required for aggregator cross-node reads) |
+| `pattern` | string | | Pattern name (required for cross-node S3 reads) |
 
 **Response:**
 
@@ -262,7 +262,7 @@ Switch to a different pattern. Clears the client's buffer and triggers a `patter
 
 #### `load_range`
 
-Request a range of messages from the ring buffer.
+Request a range of messages from the Redis sorted set.
 
 ```json
 {"type": "load_range", "data": {"start": 0, "count": 100}}
@@ -274,51 +274,6 @@ Keep-alive ping.
 
 ```json
 {"type": "ping"}
-```
-
----
-
-## gRPC Protocol
-
-Collectors and the Aggregator communicate via a bidirectional gRPC stream. The service is `flume.v1.CollectorService` with a single RPC `StreamLogs`. Messages are JSON-encoded using a raw codec (not protobuf serialization), so the wire format matches the JSON examples below.
-
-### Handshake (Collector → Aggregator)
-
-First message on every stream:
-
-```json
-{"type": "handshake", "data": {"node_name": "node-1", "pattern_name": "all"}}
-```
-
-### Log Batch (Collector → Aggregator)
-
-```json
-{
-  "type": "log_batch",
-  "data": {
-    "entries": [
-      {
-        "id": "msg-uuid",
-        "content": "log line",
-        "is_json": false,
-        "timestamp": "2026-03-06T12:30:45.123Z",
-        "level": "info",
-        "labels": {"app": "api-server"},
-        "namespace": "default",
-        "pod": "api-abc",
-        "container": "api",
-        "node_name": "node-1"
-      }
-    ],
-    "sequence": 42
-  }
-}
-```
-
-### Ack (Aggregator → Collector)
-
-```json
-{"type": "ack", "data": {"sequence": 42}}
 ```
 
 ---
@@ -346,4 +301,4 @@ First message on every stream:
 }
 ```
 
-Note: `origin.meta` and `kube` fields are optional and omitted when empty. The gRPC wire format uses flat fields (see [gRPC Protocol](#grpc-protocol)) which are converted to this nested structure on the aggregator side.
+Note: `origin.meta` and `kube` fields are optional and omitted when empty.

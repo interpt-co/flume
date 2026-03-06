@@ -1,6 +1,6 @@
 apiVersion: v2
 name: flume
-description: Kubernetes log collector and aggregator
+description: Kubernetes log collector and dispatcher
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
