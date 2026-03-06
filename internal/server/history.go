@@ -164,6 +164,12 @@ func (m *ClientManager) HandleLabels(w http.ResponseWriter, r *http.Request) {
 	// Use pattern-scoped ring if in aggregator mode.
 	if m.registry != nil {
 		patternName := r.URL.Query().Get("pattern")
+		if patternName == "" {
+			names := m.registry.Names()
+			if len(names) > 0 {
+				patternName = names[0]
+			}
+		}
 		if patternName != "" {
 			if p := m.registry.Get(patternName); p != nil {
 				ring = p.Ring()
