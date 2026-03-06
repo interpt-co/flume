@@ -67,15 +67,17 @@ const bufferUsage = computed(() => {
 .status-bar {
   display: flex;
   align-items: center;
-  height: 28px;
-  padding: 0 8px;
+  height: 34px;
+  padding: 0 12px;
   background-color: var(--flume-bg-secondary);
   border-top: 1px solid var(--flume-border);
   font-family: var(--flume-font-family);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--flume-fg-secondary);
   flex-shrink: 0;
   gap: 0;
+  border-radius: 8px;
+  margin: 0 6px 6px;
 }
 
 .status-bar__item {
@@ -132,8 +134,8 @@ const bufferUsage = computed(() => {
   color: var(--flume-fg-secondary);
   font-family: var(--flume-font-family);
   font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 3px;
+  padding: 3px 10px;
+  border-radius: 6px;
   cursor: pointer;
   line-height: 1;
   display: flex;

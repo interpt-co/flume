@@ -65,11 +65,13 @@ function toggleLabel(key: string, value: string) {
 .label-filter {
   display: flex;
   align-items: center;
-  padding: 4px 12px;
+  padding: 6px 12px;
   border-bottom: 1px solid var(--flume-border);
   background-color: var(--flume-bg-secondary);
   flex-shrink: 0;
   overflow-x: auto;
+  border-radius: 8px;
+  margin: 4px 6px 0;
 }
 
 .label-filter__pills {
@@ -94,8 +96,8 @@ function toggleLabel(key: string, value: string) {
 
 .label-filter__scope-badge {
   font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 3px;
+  padding: 2px 8px;
+  border-radius: 8px;
   background-color: var(--flume-accent);
   color: var(--flume-bg);
   font-weight: 600;
@@ -105,9 +107,9 @@ function toggleLabel(key: string, value: string) {
 
 .label-filter__pill {
   font-size: 11px;
-  padding: 1px 6px;
+  padding: 2px 8px;
   border: 1px solid var(--flume-border);
-  border-radius: 3px;
+  border-radius: 6px;
   background: var(--flume-bg);
   color: var(--flume-fg);
   cursor: pointer;
