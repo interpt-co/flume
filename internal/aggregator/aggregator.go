@@ -3,6 +3,7 @@ package aggregator
 import (
 	"context"
 	"fmt"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 
@@ -27,6 +28,10 @@ type Config struct {
 	S3Prefix   string
 	S3Region   string
 	S3Endpoint string
+
+	// Auth callback settings.
+	AuthURL     string
+	AuthTimeout time.Duration
 }
 
 // Aggregator is the central component that receives logs from collectors
@@ -82,7 +87,20 @@ func (a *Aggregator) Run(ctx context.Context) error {
 	// 3. Create pattern-aware ClientManager.
 	manager := server.NewClientManagerWithRegistry(registry, a.cfg.BulkWindowMS)
 
-	// 4. Optionally create S3 reader for cross-node history.
+	// 4. Optionally configure auth callback.
+	if a.cfg.AuthURL != "" {
+		timeout := a.cfg.AuthTimeout
+		if timeout == 0 {
+			timeout = 5 * time.Second
+		}
+		manager.SetAuthConfig(&server.AuthConfig{
+			URL:     a.cfg.AuthURL,
+			Timeout: timeout,
+		})
+		log.WithField("url", a.cfg.AuthURL).Info("auth callback enabled")
+	}
+
+	// 5. Optionally create S3 reader for cross-node history.
 	var serverOpts []server.ServerOption
 	if a.cfg.S3Bucket != "" {
 		s3cfg := storage.S3Config{
@@ -101,7 +119,7 @@ func (a *Aggregator) Run(ctx context.Context) error {
 		log.WithField("bucket", a.cfg.S3Bucket).Info("S3 history reader enabled")
 	}
 
-	// 5. Start HTTP server.
+	// 6. Start HTTP server.
 	srv := server.NewServer(a.cfg.Host, a.cfg.Port, manager, serverOpts...)
 
 	addr := fmt.Sprintf("http://%s:%d", a.cfg.Host, a.cfg.Port)

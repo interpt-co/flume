@@ -62,6 +62,9 @@ var aggregatorCmd = &cobra.Command{
 			S3Endpoint:   getStringFlag(cmd, "s3-endpoint", "FLUME_S3_ENDPOINT", ""),
 		}
 
+		cfg.AuthURL = getStringFlag(cmd, "auth-url", "FLUME_AUTH_URL", "")
+		cfg.AuthTimeout = getDurationFlag(cmd, "auth-timeout", "FLUME_AUTH_TIMEOUT", 5*time.Second)
+
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
@@ -86,6 +89,8 @@ func init() {
 	aggregatorCmd.Flags().String("s3-prefix", "", "S3 key prefix")
 	aggregatorCmd.Flags().String("s3-region", "", "AWS region")
 	aggregatorCmd.Flags().String("s3-endpoint", "", "Custom S3 endpoint (MinIO, localstack)")
+	aggregatorCmd.Flags().String("auth-url", "", "Auth callback URL (POST) for WebSocket upgrade authorization")
+	aggregatorCmd.Flags().String("auth-timeout", "5s", "Timeout for auth callback requests")
 
 	rootCmd.AddCommand(collectorCmd, aggregatorCmd)
 }
