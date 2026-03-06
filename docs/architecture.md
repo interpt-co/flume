@@ -39,9 +39,9 @@ The Collector runs as a DaemonSet on every Kubernetes node. It:
 2. **Tails** each file with `nxadm/tail`, handling log rotation (rename + create)
 3. **Parses** CRI log format lines (timestamp, stream, partial flag, content)
 4. **Assembles** multi-line partial logs via the CRI Assembler
-5. **Enriches** messages with pod labels from the Kubernetes API
-6. **Dispatches** each message through a processing pipeline (JSON parse, level extraction)
-7. **Routes** messages to per-pattern destinations: ring buffer, S3, and gRPC stream
+5. **Enriches** messages with pod labels from the Kubernetes API (via podwatch cache)
+6. **Processes** each message through a pipeline (JSON detection, level extraction, ID assignment)
+7. **Routes** messages via the Dispatcher to per-pattern destinations: ring buffer, S3, and gRPC stream
 
 #### Key Packages
 
@@ -80,10 +80,10 @@ The Aggregator receives log streams from all Collectors and serves them to brows
 
 ```mermaid
 graph LR
-    A[Log File] --> B[tail] --> C[CRI Parse] --> D[Assembler] --> E[Pipeline · Parse + Enrich] --> F[Dispatcher]
-    F --> G[Ring Buffer]
-    F --> H[S3 Writer]
-    F --> I[gRPC Stream]
+    A[Log File] --> B[tail] --> C[CRI Parse] --> D[Assembler] --> E[Pod Label Enrich] --> F[Pipeline · JSON Parse + Level Extract] --> G[Dispatcher]
+    G --> H[Ring Buffer]
+    G --> I[S3 Writer]
+    G --> J[gRPC Stream]
 ```
 
 ### Aggregator Pipeline
@@ -139,15 +139,7 @@ The frontend communicates with the Aggregator via a JSON-over-WebSocket protocol
         manifest.json                 # Per-hour index of chunks with metadata
 ```
 
-When `PartitionLabel` is configured, messages are further grouped:
-
-```
-{prefix}/
-  {partition_value}/
-    {YYYY}/{MM}/{DD}/{HH}/
-      chunk-{unix_ms}.json.gz
-      manifest.json
-```
+The storage layer also supports an optional `PartitionLabel` for grouping by a label value, but this is not currently exposed in the collector configuration.
 
 ## Auth Callback
 
@@ -162,7 +154,7 @@ The Aggregator supports an optional auth callback for WebSocket upgrades:
 
 The Vue.js SPA (`web/src/`) provides:
 
-- **Real-time log viewer** with virtual scrolling (handles thousands of rows)
+- **Real-time log viewer** with capped in-memory buffer for smooth performance
 - **Pattern selector** for switching between pattern views
 - **Label-based filtering** (server-side + client-side)
 - **Text/regex search** across log content

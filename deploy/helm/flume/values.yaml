@@ -21,6 +21,8 @@ aggregator:
   port: 8080
   grpcPort: 9090
   maxMessages: 50000
+  bulkWindowMS: 100
+  verbose: false
   authUrl: ""
   authTimeout: "5s"
   resources:

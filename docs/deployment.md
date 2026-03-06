@@ -36,6 +36,8 @@ All configuration is done via Helm values. See `deploy/helm/flume/values.yaml` f
 | `aggregator.port` | `8080` | HTTP server port |
 | `aggregator.grpcPort` | `9090` | gRPC server port (collectors connect here) |
 | `aggregator.maxMessages` | `50000` | Per-pattern ring buffer capacity |
+| `aggregator.bulkWindowMS` | `100` | WebSocket flush interval (ms) |
+| `aggregator.verbose` | `false` | Enable debug logging |
 | `aggregator.authUrl` | `""` | Auth callback URL for WebSocket authorization |
 | `aggregator.authTimeout` | `5s` | Timeout for auth callback requests |
 
@@ -131,8 +133,8 @@ flume collector [flags]
 
 ```yaml
 collector:
-  log_dir: /var/log/containers
-  buffer_size: 10000
+  logDir: /var/log/containers
+  bufferSize: 10000
   verbose: false
 
   aggregator:
@@ -147,12 +149,12 @@ collector:
     bucket: my-log-bucket
     prefix: flume
     region: us-east-1
-    flush_interval: 10s
-    flush_count: 1000
+    flushInterval: 10s
+    flushCount: 1000
     retention: 168h
 
   # Optional: static labels for local testing (no K8s API needed)
-  static_labels:
+  staticLabels:
     default/my-pod:
       app: my-app
       env: dev

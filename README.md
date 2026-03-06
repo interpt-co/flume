@@ -122,8 +122,8 @@ Collector config YAML:
 
 ```yaml
 collector:
-  log_dir: /var/log/containers
-  buffer_size: 10000
+  logDir: /var/log/containers
+  bufferSize: 10000
   verbose: false
 
   aggregator:
@@ -138,8 +138,8 @@ collector:
     bucket: my-log-bucket
     prefix: flume
     region: us-east-1
-    flush_interval: 10s
-    flush_count: 1000
+    flushInterval: 10s
+    flushCount: 1000
     retention: 168h
 ```
 

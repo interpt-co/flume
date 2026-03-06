@@ -280,7 +280,7 @@ Keep-alive ping.
 
 ## gRPC Protocol
 
-Collectors and the Aggregator communicate via a bidirectional gRPC stream using JSON encoding (not protobuf). The service is `flume.v1.CollectorService` with a single RPC `StreamLogs`.
+Collectors and the Aggregator communicate via a bidirectional gRPC stream. The service is `flume.v1.CollectorService` with a single RPC `StreamLogs`. Messages are JSON-encoded using a raw codec (not protobuf serialization), so the wire format matches the JSON examples below.
 
 ### Handshake (Collector → Aggregator)
 
@@ -298,13 +298,16 @@ First message on every stream:
   "data": {
     "entries": [
       {
+        "id": "msg-uuid",
         "content": "log line",
+        "is_json": false,
         "timestamp": "2026-03-06T12:30:45.123Z",
-        "source": "container",
         "level": "info",
-        "labels": {"namespace": "default"},
-        "kube": {"namespace": "default", "pod": "api-abc", "container": "api"},
-        "origin": "node-1"
+        "labels": {"app": "api-server"},
+        "namespace": "default",
+        "pod": "api-abc",
+        "container": "api",
+        "node_name": "node-1"
       }
     ],
     "sequence": 42
@@ -327,17 +330,20 @@ First message on every stream:
   "id": "string",
   "content": "string",
   "ts": "RFC3339Nano string",
-  "source": "container | forward | socket | demo",
+  "source": "container | forward | socket | demo | loki | stdin | file",
   "level": "debug | info | warn | error | fatal",
   "is_json": true,
   "json_content": {},
   "labels": {"key": "value"},
-  "origin": {"name": "node-name"},
+  "origin": {"name": "node-name", "meta": {}},
   "kube": {
     "namespace": "string",
     "pod": "string",
     "container": "string",
-    "pod_uid": "string"
+    "pod_uid": "string",
+    "node_name": "string"
   }
 }
 ```
+
+Note: `origin.meta` and `kube` fields are optional and omitted when empty. The gRPC wire format uses flat fields (see [gRPC Protocol](#grpc-protocol)) which are converted to this nested structure on the aggregator side.

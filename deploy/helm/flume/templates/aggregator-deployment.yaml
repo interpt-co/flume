@@ -29,6 +29,8 @@ spec:
             - "{{ .Values.aggregator.grpcPort }}"
             - --max-messages
             - "{{ .Values.aggregator.maxMessages }}"
+            - --bulk-window-ms
+            - "{{ .Values.aggregator.bulkWindowMS }}"
             {{- if .Values.s3.enabled }}
             - --s3-bucket
             - "{{ .Values.s3.bucket }}"
@@ -47,7 +49,9 @@ spec:
             - --auth-timeout
             - "{{ .Values.aggregator.authTimeout }}"
             {{- end }}
+            {{- if .Values.aggregator.verbose }}
             - --verbose
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.aggregator.port }}
