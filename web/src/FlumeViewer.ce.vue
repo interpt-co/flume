@@ -55,6 +55,7 @@ const props = withDefaults(
     autoFollow?: boolean
     showSearch?: boolean
     hideLabels?: string
+    showLabels?: string
     height?: string
   }>(),
   {
@@ -64,6 +65,7 @@ const props = withDefaults(
     autoFollow: true,
     showSearch: true,
     hideLabels: '',
+    showLabels: '',
     height: '400px',
   },
 )
@@ -217,11 +219,14 @@ const hiddenLabelKeys = computed(() => {
   return keys
 })
 
-const sortedLabelKeys = computed(() =>
-  Object.keys(availableLabels.value)
-    .filter(k => !hiddenLabelKeys.value.has(k))
-    .sort()
-)
+const sortedLabelKeys = computed(() => {
+  const keys = Object.keys(availableLabels.value)
+  if (props.showLabels) {
+    const allowed = new Set(props.showLabels.split(',').map(k => k.trim()).filter(Boolean))
+    return keys.filter(k => allowed.has(k)).sort()
+  }
+  return keys.filter(k => !hiddenLabelKeys.value.has(k)).sort()
+})
 
 const hasPreFilters = computed(() => Object.keys(preFilters.value).length > 0)
 const hasLabels = computed(() => Object.keys(availableLabels.value).length > 0)
@@ -791,37 +796,36 @@ defineExpose({
     :data-theme="currentTheme"
     :style="{ height: props.height }"
   >
-    <!-- Search bar -->
-    <div
-      v-if="props.showSearch"
-      class="search-bar"
-      :class="{ 'search-bar--focused': searchFocused }"
-    >
-      <div class="search-bar__icon">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="11" cy="11" r="8"/>
-          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-        </svg>
+    <!-- Status bar -->
+    <div class="status-bar">
+      <div class="status-bar__item">
+        <span class="status-bar__dot" :class="statusDotClass"></span>
+        <span>{{ statusLabel }}</span>
       </div>
-      <input
-        ref="searchInput"
-        v-model="searchText"
-        class="search-bar__input"
-        placeholder="Filter logs..."
-        @keydown.escape="clearSearch"
-        @focus="searchFocused = true"
-        @blur="searchFocused = false"
-      />
-      <span v-if="filterActive" class="search-bar__count">
-        {{ matchCount }} of {{ totalCount }}
-      </span>
-      <button
-        class="search-bar__btn"
-        :class="{ 'search-bar__btn--active': regexMode }"
-        @click="toggleRegex"
-        title="Toggle regex mode"
-      >.*</button>
-      <button v-if="searchText" class="search-bar__btn" @click="clearSearch" title="Clear">&#x2715;</button>
+      <div class="status-bar__divider"></div>
+      <div class="status-bar__item">
+        <span>Messages: {{ totalCount }}</span>
+      </div>
+      <div v-if="bufferUsage" class="status-bar__divider"></div>
+      <div v-if="bufferUsage" class="status-bar__item">
+        <span>Buffer: {{ bufferUsage }}</span>
+      </div>
+      <div class="status-bar__divider"></div>
+      <div class="status-bar__item">
+        <button @click="toggleFollowing" class="status-bar__control" :title="following ? 'Pause' : 'Resume'">
+          <svg v-if="following" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="6" y="4" width="4" height="16" rx="1"/>
+            <rect x="14" y="4" width="4" height="16" rx="1"/>
+          </svg>
+          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <polygon points="6,4 20,12 6,20"/>
+          </svg>
+        </button>
+      </div>
+      <div class="status-bar__spacer"></div>
+      <div v-if="!following" class="status-bar__item status-bar__item--subtle status-bar__item--paused">
+        PAUSED
+      </div>
     </div>
 
     <!-- Label filter bar -->
@@ -938,36 +942,37 @@ defineExpose({
       </div>
     </Transition>
 
-    <!-- Status bar -->
-    <div class="status-bar">
-      <div class="status-bar__item">
-        <span class="status-bar__dot" :class="statusDotClass"></span>
-        <span>{{ statusLabel }}</span>
+    <!-- Search bar -->
+    <div
+      v-if="props.showSearch"
+      class="search-bar"
+      :class="{ 'search-bar--focused': searchFocused }"
+    >
+      <div class="search-bar__icon">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"/>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
       </div>
-      <div class="status-bar__divider"></div>
-      <div class="status-bar__item">
-        <span>Messages: {{ totalCount }}</span>
-      </div>
-      <div v-if="bufferUsage" class="status-bar__divider"></div>
-      <div v-if="bufferUsage" class="status-bar__item">
-        <span>Buffer: {{ bufferUsage }}</span>
-      </div>
-      <div class="status-bar__divider"></div>
-      <div class="status-bar__item">
-        <button @click="toggleFollowing" class="status-bar__control" :title="following ? 'Pause' : 'Resume'">
-          <svg v-if="following" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-            <rect x="6" y="4" width="4" height="16" rx="1"/>
-            <rect x="14" y="4" width="4" height="16" rx="1"/>
-          </svg>
-          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-            <polygon points="6,4 20,12 6,20"/>
-          </svg>
-        </button>
-      </div>
-      <div class="status-bar__spacer"></div>
-      <div v-if="!following" class="status-bar__item status-bar__item--subtle status-bar__item--paused">
-        PAUSED
-      </div>
+      <input
+        ref="searchInput"
+        v-model="searchText"
+        class="search-bar__input"
+        placeholder="Filter logs..."
+        @keydown.escape="clearSearch"
+        @focus="searchFocused = true"
+        @blur="searchFocused = false"
+      />
+      <span v-if="filterActive" class="search-bar__count">
+        {{ matchCount }} of {{ totalCount }}
+      </span>
+      <button
+        class="search-bar__btn"
+        :class="{ 'search-bar__btn--active': regexMode }"
+        @click="toggleRegex"
+        title="Toggle regex mode"
+      >.*</button>
+      <button v-if="searchText" class="search-bar__btn" @click="clearSearch" title="Clear">&#x2715;</button>
     </div>
   </div>
 </template>
@@ -1057,7 +1062,7 @@ defineExpose({
   align-items: center;
   height: 38px;
   padding: 0 12px;
-  border-bottom: 1px solid var(--flume-border);
+  border-top: 1px solid var(--flume-border);
   border-left: 2px solid transparent;
   background-color: var(--flume-bg-secondary);
   font-family: var(--flume-font-family);
@@ -1066,7 +1071,7 @@ defineExpose({
   gap: 8px;
   transition: border-color 0.15s;
   border-radius: 8px;
-  margin: 6px 6px 0;
+  margin: 0 6px 6px;
 }
 
 .search-bar--focused {
@@ -1574,14 +1579,14 @@ defineExpose({
   height: 34px;
   padding: 0 12px;
   background-color: var(--flume-bg-secondary);
-  border-top: 1px solid var(--flume-border);
+  border-bottom: 1px solid var(--flume-border);
   font-family: var(--flume-font-family);
   font-size: 12px;
   color: var(--flume-fg-secondary);
   flex-shrink: 0;
   gap: 0;
   border-radius: 8px;
-  margin: 0 6px 6px;
+  margin: 6px 6px 0;
 }
 
 .status-bar__item {
