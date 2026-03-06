@@ -3,6 +3,7 @@ import { useConnectionStore } from '../stores/connection'
 import { useLogsStore } from '../stores/logs'
 import { useLabelsStore } from '../stores/labels'
 import { usePatternsStore } from '../stores/patterns'
+import { usePrefilterStore } from '../stores/prefilter'
 import type { WSMessage, ClientJoinedData, LogBulkData, StatusData, PatternChangedData } from '../types'
 
 export function useWebSocket(url: string) {
@@ -16,6 +17,7 @@ export function useWebSocket(url: string) {
   const logsStore = useLogsStore()
   const labelsStore = useLabelsStore()
   const patternsStore = usePatternsStore()
+  const prefilterStore = usePrefilterStore()
 
   function connect() {
     if (ws) {
@@ -57,6 +59,9 @@ export function useWebSocket(url: string) {
         connectionStore.setConnected(data.client_id, data.buffer_size)
         if (data.patterns) {
           patternsStore.setAvailable(data.patterns, data.default_pattern)
+        }
+        if (data.pre_filters) {
+          prefilterStore.setFromServer(data.pre_filters)
         }
         connectionStore.loadInitialHistory()
         break

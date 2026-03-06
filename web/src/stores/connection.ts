@@ -3,10 +3,21 @@ import { ref } from 'vue'
 import type { StatusData, LogMessage } from '../types'
 import { useLogsStore, WINDOW_SIZE } from './logs'
 import { usePatternsStore } from './patterns'
+import { usePrefilterStore } from './prefilter'
 
-function patternParam(): string {
+function queryParams(): string {
   const patternsStore = usePatternsStore()
-  return patternsStore.current ? `&pattern=${encodeURIComponent(patternsStore.current)}` : ''
+  const prefilterStore = usePrefilterStore()
+  const parts: string[] = []
+  if (patternsStore.current) parts.push(`pattern=${encodeURIComponent(patternsStore.current)}`)
+  if (prefilterStore.filterParam) parts.push(`filter=${encodeURIComponent(prefilterStore.filterParam)}`)
+  return parts.join('&')
+}
+
+function buildURL(base: string, extraParams?: string): string {
+  const qp = queryParams()
+  const allParams = [extraParams, qp].filter(Boolean).join('&')
+  return allParams ? `${base}?${allParams}` : base
 }
 
 export const useConnectionStore = defineStore('connection', () => {
@@ -54,8 +65,7 @@ export const useConnectionStore = defineStore('connection', () => {
   async function loadInitialHistory() {
     const logsStore = useLogsStore()
     try {
-      const pp = patternParam()
-      const statusRes = await fetch(`/api/status?${pp.replace('&', '')}`)
+      const statusRes = await fetch(buildURL('/api/status'))
       const statusData = await statusRes.json()
       const bufUsed = statusData.buffer_used as number
       if (bufUsed === 0) return
@@ -63,7 +73,7 @@ export const useConnectionStore = defineStore('connection', () => {
       const count = Math.min(bufUsed, WINDOW_SIZE)
       const start = bufUsed - count
 
-      const res = await fetch(`/api/client/load?start=${start}&count=${count}${pp}`)
+      const res = await fetch(buildURL('/api/client/load', `start=${start}&count=${count}`))
       const data = await res.json() as { messages: LogMessage[]; total: number }
       logsStore.setInitialMessages(data.messages, start)
     } catch {
@@ -77,15 +87,13 @@ export const useConnectionStore = defineStore('connection', () => {
 
     logsStore.isLoadingHistory = true
     try {
-      const pp = patternParam()
-
       if (logsStore.oldestLoadedIndex > 0) {
         // Load from ring buffer
         const start = Math.max(0, logsStore.oldestLoadedIndex - WINDOW_SIZE)
         const count = logsStore.oldestLoadedIndex - start
         if (count <= 0) return
 
-        const res = await fetch(`/api/client/load?start=${start}&count=${count}${pp}`)
+        const res = await fetch(buildURL('/api/client/load', `start=${start}&count=${count}`))
         const data = await res.json() as { messages: LogMessage[]; total: number }
         logsStore.prependHistory(data.messages, start)
       } else if (logsStore.s3HasMore) {
@@ -93,7 +101,7 @@ export const useConnectionStore = defineStore('connection', () => {
         const before = logsStore.oldestTimestamp
         if (!before) return
 
-        const res = await fetch(`/api/history?before=${encodeURIComponent(before)}&count=${WINDOW_SIZE}${pp}`)
+        const res = await fetch(buildURL('/api/history', `before=${encodeURIComponent(before)}&count=${WINDOW_SIZE}`))
         const data = await res.json() as { messages: LogMessage[]; has_more: boolean }
 
         if (!data.has_more) {

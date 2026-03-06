@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { usePatternsStore } from './patterns'
+import { usePrefilterStore } from './prefilter'
 
 export const useLabelsStore = defineStore('labels', () => {
   const activeLabels = ref<Record<string, string>>({})
@@ -12,8 +13,12 @@ export const useLabelsStore = defineStore('labels', () => {
   async function fetchLabels() {
     try {
       const patternsStore = usePatternsStore()
-      const pp = patternsStore.current ? `?pattern=${encodeURIComponent(patternsStore.current)}` : ''
-      const res = await fetch(`/api/labels${pp}`)
+      const prefilterStore = usePrefilterStore()
+      const parts: string[] = []
+      if (patternsStore.current) parts.push(`pattern=${encodeURIComponent(patternsStore.current)}`)
+      if (prefilterStore.filterParam) parts.push(`filter=${encodeURIComponent(prefilterStore.filterParam)}`)
+      const qs = parts.length > 0 ? '?' + parts.join('&') : ''
+      const res = await fetch(`/api/labels${qs}`)
       if (res.ok) {
         availableLabels.value = await res.json()
       }

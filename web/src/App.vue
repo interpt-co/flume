@@ -12,13 +12,17 @@ import PatternSelector from './components/PatternSelector.vue'
 import { useWebSocket } from './composables/useWebSocket'
 import { useTheme } from './composables/useTheme'
 import { useLabelsStore } from './stores/labels'
+import { usePrefilterStore } from './stores/prefilter'
 import type { LogMessage } from './types'
 
 useTheme()
 const labelsStore = useLabelsStore()
+const prefilterStore = usePrefilterStore()
+prefilterStore.loadFromURL()
 
 const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-const wsUrl = `${wsProtocol}//${window.location.host}/ws`
+const filterQS = prefilterStore.queryString
+const wsUrl = `${wsProtocol}//${window.location.host}/ws${filterQS ? '?' + filterQS : ''}`
 const { connect } = useWebSocket(wsUrl)
 
 const selectedMessage = ref<LogMessage | null>(null)

@@ -34,6 +34,7 @@ export interface ClientJoinedData {
   buffer_size: number
   patterns?: string[]
   default_pattern?: string
+  pre_filters?: Record<string, string>
 }
 
 export interface LogBulkData {
