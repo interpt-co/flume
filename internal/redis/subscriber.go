@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"time"
 
-	goredis "github.com/redis/go-redis/v9"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/interpt-co/flume/internal/models"
@@ -130,9 +129,4 @@ func decodePubSubPayload(payload string) ([]models.LogMessage, error) {
 		msgs = append(msgs, msg)
 	}
 	return msgs, nil
-}
-
-// subscribeRaw returns a raw *goredis.PubSub for testing.
-func (s *Subscriber) subscribeRaw(ctx context.Context, pattern string) *goredis.PubSub {
-	return s.client.rdb.Subscribe(ctx, s.client.channelKey(pattern))
 }

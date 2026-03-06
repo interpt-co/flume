@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -191,14 +192,16 @@ func (s *S3Storage) flush(ctx context.Context) error {
 		groups[partition] = append(groups[partition], m)
 	}
 
+	var errs []error
 	for partition, group := range groups {
 		key := PartitionedChunkKey(s.cfg.Prefix, partition, now)
 		if err := s.writeChunk(ctx, group, key); err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("partition %s: %w", partition, err))
+			continue
 		}
 		s.appendManifestAfterFlush(ctx, key, group, partition, now)
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // writeChunk marshals messages to gzipped JSON and writes them to S3 at the given key.

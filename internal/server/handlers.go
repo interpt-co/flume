@@ -112,13 +112,14 @@ type PatternInfo struct {
 
 // HandlePatterns returns available pattern names and stats.
 func (m *ClientManager) HandlePatterns(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	patterns, err := m.redisReader.GetPatterns(r.Context())
 	if err != nil {
-		json.NewEncoder(w).Encode([]PatternInfo{})
+		log.WithError(err).Warn("HandlePatterns: redis error")
+		http.Error(w, `{"error":"failed to retrieve patterns"}`, http.StatusInternalServerError)
 		return
 	}
+
+	w.Header().Set("Content-Type", "application/json")
 
 	// Count local subscribers per pattern.
 	m.mu.RLock()
