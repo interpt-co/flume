@@ -88,8 +88,8 @@ const levelClass = computed(() => {
   text-align: center;
   font-weight: 600;
   font-size: 11px;
-  border-radius: 3px;
-  padding: 1px 4px;
+  border-radius: 5px;
+  padding: 2px 6px;
 }
 
 .log-row__level--debug {

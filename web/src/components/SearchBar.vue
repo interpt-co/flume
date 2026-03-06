@@ -85,15 +85,17 @@ onUnmounted(() => {
 .search-bar {
   display: flex;
   align-items: center;
-  height: 32px;
-  padding: 0 8px;
+  height: 38px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--flume-border);
   border-left: 2px solid transparent;
   background-color: var(--flume-bg-secondary);
   font-family: var(--flume-font-family);
   font-size: var(--flume-font-size);
   flex-shrink: 0;
-  gap: 6px;
+  gap: 8px;
+  border-radius: 8px;
+  margin: 6px 6px 0;
   transition: border-color 0.15s;
 }
 
@@ -118,7 +120,7 @@ onUnmounted(() => {
   color: var(--flume-fg);
   font-family: var(--flume-font-family);
   font-size: var(--flume-font-size);
-  padding: 4px 0;
+  padding: 6px 4px;
 }
 
 .search-bar__input::placeholder {
@@ -140,8 +142,8 @@ onUnmounted(() => {
   color: var(--flume-fg-secondary);
   font-family: var(--flume-font-family);
   font-size: 11px;
-  padding: 1px 8px;
-  border-radius: 3px;
+  padding: 3px 10px;
+  border-radius: 6px;
   cursor: pointer;
   line-height: 1;
 }

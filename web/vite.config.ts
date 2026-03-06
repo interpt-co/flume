@@ -9,6 +9,9 @@ export default defineConfig({
       customElement: isWcBuild,
     }),
   ],
+  define: isWcBuild
+    ? { 'process.env.NODE_ENV': JSON.stringify('production') }
+    : {},
   server: {
     proxy: {
       '/ws': {

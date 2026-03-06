@@ -1,22 +1,69 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
-import type { LogMessage, WSMessage, ClientJoinedData, LogBulkData, StatusData } from './types'
+
+// ---- Types (inlined — no external imports in WC) -------------------------
+
+interface Origin {
+  name: string
+  meta?: Record<string, string>
+}
+
+interface LogMessage {
+  id: string
+  content: string
+  json_content?: unknown
+  is_json: boolean
+  ts: string
+  source: string
+  origin: Origin
+  labels?: Record<string, string>
+  level?: string
+}
+
+interface WSMessage {
+  type: string
+  data?: any
+}
+
+interface ClientJoinedData {
+  client_id: string
+  buffer_size: number
+  patterns?: string[]
+  default_pattern?: string
+  pre_filters?: Record<string, string>
+}
+
+interface LogBulkData {
+  messages: LogMessage[]
+  total: number
+}
+
+interface StatusData {
+  clients: number
+  messages: number
+  buffer_used: number
+  buffer_capacity: number
+}
 
 // ---- Props ---------------------------------------------------------------
 
 const props = withDefaults(
   defineProps<{
     wsUrl?: string
+    baseUrl?: string
     theme?: 'light' | 'dark'
     autoFollow?: boolean
     showSearch?: boolean
+    hideLabels?: string
     height?: string
   }>(),
   {
     wsUrl: '',
+    baseUrl: '',
     theme: 'dark',
     autoFollow: true,
     showSearch: true,
+    hideLabels: '',
     height: '400px',
   },
 )
@@ -31,50 +78,115 @@ const emit = defineEmits<{
   'flume:row-click': [message: LogMessage]
 }>()
 
-// ---- Local state (replaces Pinia stores) ---------------------------------
+// ---- Constants -----------------------------------------------------------
 
-// logs state
-const messages = ref<LogMessage[]>([])
-const seenIds = new Set<string>()
-const filter = ref('')
-const filterMode = ref<'text' | 'regex'>('text')
-const isLoadingHistory = ref(false)
+const WINDOW_SIZE = 500
+const MAX_MESSAGES = 5000
+const MAX_RECONNECT_DELAY = 30000
+const LABEL_POLL_INTERVAL = 30000
 
-// connection state
+// ---- Local state ---------------------------------------------------------
+
+// Connection
 const connStatus = ref<'connecting' | 'connected' | 'disconnected'>('disconnected')
 const serverStats = ref<StatusData | null>(null)
-const following = ref(props.autoFollow)
+const patternName = ref<string | null>(null)
+const preFilters = ref<Record<string, string>>({})
+const bufferSize = ref(0)
 
-// settings state (local, no localStorage in WC context)
-const currentTheme = ref<'light' | 'dark'>(props.theme)
+// Messages
+const messages = ref<LogMessage[]>([])
+const seenIds = new Set<string>()
+const oldestLoadedIndex = ref(0)
+const isLoadingHistory = ref(false)
+const s3HasMore = ref(true)
+
+// Filtering
+const filter = ref('')
+const filterMode = ref<'text' | 'regex'>('text')
+const activeLabels = ref<Record<string, string>>({})
+const availableLabels = ref<Record<string, string[]>>({})
+
+// UI state
+const following = ref(props.autoFollow)
 const localAutoFollow = ref(props.autoFollow)
+const currentTheme = ref<'light' | 'dark'>(props.theme)
 const showTimestamp = ref(true)
 const showLevel = ref(true)
 const showSource = ref(true)
 
-// ---- Computed ------------------------------------------------------------
+// ---- Computed: query params helper ----------------------------------------
+
+function queryParams(): string {
+  const parts: string[] = []
+  if (patternName.value) parts.push(`pattern=${encodeURIComponent(patternName.value)}`)
+  const filterEntries = Object.entries(preFilters.value)
+  if (filterEntries.length > 0) {
+    const filterParam = filterEntries.map(([k, v]) => `${k}:${v}`).join(',')
+    parts.push(`filter=${encodeURIComponent(filterParam)}`)
+  }
+  return parts.join('&')
+}
+
+function buildURL(path: string, extraParams?: string): string {
+  const base = `${props.baseUrl}${path}`
+  const qp = queryParams()
+  const allParams = [extraParams, qp].filter(Boolean).join('&')
+  return allParams ? `${base}?${allParams}` : base
+}
+
+// ---- Computed: filtered messages ------------------------------------------
 
 const filteredMessages = computed(() => {
-  if (!filter.value) return messages.value
+  const hasLabelFilter = Object.keys(activeLabels.value).length > 0
+  const hasTextFilter = !!filter.value
 
-  if (filterMode.value === 'regex') {
-    try {
-      const re = new RegExp(filter.value, 'i')
-      return messages.value.filter((msg) => re.test(msg.content))
-    } catch {
-      return messages.value
+  if (!hasTextFilter && !hasLabelFilter) return messages.value
+
+  let result = messages.value
+
+  // Apply label/level filter
+  if (hasLabelFilter) {
+    result = result.filter((msg) => {
+      for (const [key, val] of Object.entries(activeLabels.value)) {
+        if (key === 'level') {
+          if (msg.level?.toLowerCase() !== val.toLowerCase()) return false
+        } else {
+          if (!msg.labels || msg.labels[key] !== val) return false
+        }
+      }
+      return true
+    })
+  }
+
+  // Apply text/regex filter
+  if (hasTextFilter) {
+    if (filterMode.value === 'regex') {
+      try {
+        const re = new RegExp(filter.value, 'i')
+        result = result.filter((msg) => re.test(msg.content))
+      } catch {
+        // invalid regex
+      }
+    } else {
+      const term = filter.value.toLowerCase()
+      result = result.filter((msg) => msg.content.toLowerCase().includes(term))
     }
   }
 
-  const term = filter.value.toLowerCase()
-  return messages.value.filter((msg) => msg.content.toLowerCase().includes(term))
+  return result
 })
 
 const filterActive = computed(() => !!filter.value)
 const matchCount = computed(() => filteredMessages.value.length)
 const totalCount = computed(() => messages.value.length)
-
 const regexMode = computed(() => filterMode.value === 'regex')
+
+const canLoadMore = computed(() => oldestLoadedIndex.value > 0 || s3HasMore.value)
+const oldestTimestamp = computed(() => {
+  if (messages.value.length === 0) return null
+  return messages.value[0].ts
+})
 
 const statusLabel = computed(() => {
   switch (connStatus.value) {
@@ -91,6 +203,32 @@ const bufferUsage = computed(() => {
   if (!stats) return null
   return `${stats.buffer_used}/${stats.buffer_capacity}`
 })
+
+// ---- Computed: label filter bar -------------------------------------------
+
+const hiddenLabelKeys = computed(() => {
+  const keys = new Set(Object.keys(preFilters.value))
+  if (props.hideLabels) {
+    for (const k of props.hideLabels.split(',')) {
+      const trimmed = k.trim()
+      if (trimmed) keys.add(trimmed)
+    }
+  }
+  return keys
+})
+
+const sortedLabelKeys = computed(() =>
+  Object.keys(availableLabels.value)
+    .filter(k => !hiddenLabelKeys.value.has(k))
+    .sort()
+)
+
+const hasPreFilters = computed(() => Object.keys(preFilters.value).length > 0)
+const hasLabels = computed(() => Object.keys(availableLabels.value).length > 0)
+const hasActiveLabels = computed(() => Object.keys(activeLabels.value).length > 0)
+const showLabelBar = computed(() => hasPreFilters.value || hasLabels.value)
+
+// ---- Helpers --------------------------------------------------------------
 
 const levelClass = (msg: LogMessage): string => {
   const level = msg.level?.toLowerCase() ?? ''
@@ -115,12 +253,15 @@ const formattedTime = (ts: string): string => {
   }
 }
 
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;')
+}
+
 // ---- WebSocket -----------------------------------------------------------
 
 let ws: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let reconnectDelay = 1000
-const MAX_RECONNECT_DELAY = 30000
 let manualDisconnect = false
 
 function connect() {
@@ -149,7 +290,7 @@ function connect() {
       const msg = JSON.parse(event.data) as WSMessage
       handleMessage(msg)
     } catch {
-      // ignore malformed messages
+      // ignore malformed
     }
   }
 
@@ -171,7 +312,16 @@ function handleMessage(msg: WSMessage) {
     case 'client_joined': {
       const data = msg.data as ClientJoinedData
       connStatus.value = 'connected'
+      bufferSize.value = data.buffer_size || 0
+      if (data.default_pattern) {
+        patternName.value = data.default_pattern
+      }
+      if (data.pre_filters && Object.keys(data.pre_filters).length > 0) {
+        preFilters.value = data.pre_filters
+      }
       emit('flume:connected', data.client_id)
+      loadInitialHistory()
+      fetchLabels()
       break
     }
     case 'log_bulk': {
@@ -184,16 +334,25 @@ function handleMessage(msg: WSMessage) {
       serverStats.value = data
       break
     }
+    case 'pattern_changed': {
+      const data = msg.data as { pattern: string; buffer_size: number; buffer_used: number }
+      patternName.value = data.pattern
+      clearMessages()
+      fetchLabels()
+      loadInitialHistory()
+      break
+    }
   }
 }
 
 function scheduleReconnect() {
   if (reconnectTimer) return
+  const jitter = Math.random() * 0.3 * reconnectDelay
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
     reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY)
     connect()
-  }, reconnectDelay)
+  }, reconnectDelay + jitter)
 }
 
 function disconnect() {
@@ -237,9 +396,7 @@ function toggleFollowing() {
   }
 }
 
-// ---- Log management ------------------------------------------------------
-
-const MAX_MESSAGES = 5000
+// ---- Message management ---------------------------------------------------
 
 function addMessages(msgs: LogMessage[]) {
   const newMsgs = msgs.filter((m) => !seenIds.has(m.id))
@@ -254,15 +411,160 @@ function addMessages(msgs: LogMessage[]) {
 
   if (messages.value.length > MAX_MESSAGES) {
     const excess = messages.value.length - MAX_MESSAGES
+    const removed = messages.value.splice(0, excess)
+    for (const m of removed) seenIds.delete(m.id)
+    oldestLoadedIndex.value += excess
+  }
+}
+
+function prependHistory(msgs: LogMessage[], newOldestIndex: number) {
+  // Dedup against existing
+  const newMsgs = msgs.filter((m) => !seenIds.has(m.id))
+  for (const m of newMsgs) seenIds.add(m.id)
+  messages.value = [...newMsgs, ...messages.value]
+  oldestLoadedIndex.value = newOldestIndex
+}
+
+function setInitialMessages(msgs: LogMessage[], startIndex: number) {
+  const historyIds = new Set(msgs.map(m => m.id))
+  const wsOnly = messages.value.filter(m => !historyIds.has(m.id))
+  messages.value = [...msgs, ...wsOnly]
+  oldestLoadedIndex.value = startIndex
+  rebuildSeenIds()
+}
+
+function rebuildSeenIds() {
+  seenIds.clear()
+  for (const m of messages.value) {
+    seenIds.add(m.id)
+  }
+}
+
+function trimToWindow() {
+  if (messages.value.length > WINDOW_SIZE) {
+    const excess = messages.value.length - WINDOW_SIZE
     const removed = messages.value.slice(0, excess)
     messages.value = messages.value.slice(excess)
     for (const m of removed) seenIds.delete(m.id)
+    oldestLoadedIndex.value += excess
   }
 }
 
 function clearMessages() {
   messages.value = []
   seenIds.clear()
+  oldestLoadedIndex.value = 0
+  s3HasMore.value = true
+}
+
+// ---- History loading ------------------------------------------------------
+
+async function loadInitialHistory() {
+  if (!props.baseUrl) return
+  try {
+    const statusRes = await fetch(buildURL('/api/status'))
+    if (!statusRes.ok) return
+    const statusData = await statusRes.json() as StatusData
+    const bufUsed = statusData.buffer_used
+    if (bufUsed === 0) return
+
+    const count = Math.min(bufUsed, WINDOW_SIZE)
+    const start = bufUsed - count
+
+    const res = await fetch(buildURL('/api/client/load', `start=${start}&count=${count}`))
+    if (!res.ok) return
+    const data = await res.json() as { messages: LogMessage[]; total: number }
+    setInitialMessages(data.messages, start)
+  } catch {
+    // WS stream will provide messages as fallback
+  }
+}
+
+async function loadMoreHistory() {
+  if (isLoadingHistory.value || !canLoadMore.value || !props.baseUrl) return
+
+  isLoadingHistory.value = true
+  try {
+    if (oldestLoadedIndex.value > 0) {
+      // Phase 1: Load from ring buffer
+      const start = Math.max(0, oldestLoadedIndex.value - WINDOW_SIZE)
+      const count = oldestLoadedIndex.value - start
+      if (count <= 0) return
+
+      const res = await fetch(buildURL('/api/client/load', `start=${start}&count=${count}`))
+      if (!res.ok) return
+      const data = await res.json() as { messages: LogMessage[]; total: number }
+      prependHistory(data.messages, start)
+    } else if (s3HasMore.value) {
+      // Phase 2: Fall back to S3 history
+      const before = oldestTimestamp.value
+      if (!before) return
+
+      const res = await fetch(buildURL('/api/history', `before=${encodeURIComponent(before)}&count=${WINDOW_SIZE}`))
+      if (!res.ok) return
+      const data = await res.json() as { messages: LogMessage[]; has_more: boolean }
+
+      if (!data.has_more) {
+        s3HasMore.value = false
+      }
+
+      if (data.messages && data.messages.length > 0) {
+        const sorted = [...data.messages].reverse()
+        prependHistory(sorted, 0)
+      } else {
+        s3HasMore.value = false
+      }
+    }
+  } catch {
+    // ignore
+  } finally {
+    isLoadingHistory.value = false
+  }
+}
+
+// ---- Labels ---------------------------------------------------------------
+
+let labelPollTimer: ReturnType<typeof setInterval> | null = null
+
+async function fetchLabels() {
+  if (!props.baseUrl) return
+  try {
+    const res = await fetch(buildURL('/api/labels'))
+    if (res.ok) {
+      availableLabels.value = await res.json()
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function startLabelPolling() {
+  fetchLabels()
+  if (labelPollTimer) clearInterval(labelPollTimer)
+  labelPollTimer = setInterval(fetchLabels, LABEL_POLL_INTERVAL)
+}
+
+function stopLabelPolling() {
+  if (labelPollTimer) {
+    clearInterval(labelPollTimer)
+    labelPollTimer = null
+  }
+}
+
+function toggleLabel(key: string, value: string) {
+  if (activeLabels.value[key] === value) {
+    const next = { ...activeLabels.value }
+    delete next[key]
+    activeLabels.value = next
+  } else {
+    activeLabels.value = { ...activeLabels.value, [key]: value }
+  }
+  send({ type: 'set_filter', data: { labels: activeLabels.value } })
+}
+
+function clearLabels() {
+  activeLabels.value = {}
+  send({ type: 'set_filter', data: { labels: {} } })
 }
 
 // ---- Scroll / auto-follow ------------------------------------------------
@@ -275,6 +577,7 @@ function onScroll() {
   if (!logContainer.value) return
   const { scrollTop, scrollHeight, clientHeight } = logContainer.value
   const atBottom = scrollHeight - scrollTop - clientHeight < 30
+  const atTop = scrollTop < 30
 
   if (atBottom) {
     showFollowButton.value = false
@@ -287,6 +590,23 @@ function onScroll() {
       cancelTrimTimer()
     }
     showFollowButton.value = true
+
+    if (atTop && canLoadMore.value && !isLoadingHistory.value) {
+      loadHistoryWithScroll()
+    }
+  }
+}
+
+async function loadHistoryWithScroll() {
+  if (!logContainer.value) return
+  const prevScrollHeight = logContainer.value.scrollHeight
+
+  await loadMoreHistory()
+
+  await nextTick()
+  if (logContainer.value) {
+    const newScrollHeight = logContainer.value.scrollHeight
+    logContainer.value.scrollTop += newScrollHeight - prevScrollHeight
   }
 }
 
@@ -302,10 +622,8 @@ function resumeAutoFollow() {
 
   cancelTrimTimer()
   trimTimer = setTimeout(() => {
-    if (localAutoFollow.value && messages.value.length > 500) {
-      const removed = messages.value.slice(0, messages.value.length - 500)
-      messages.value = messages.value.slice(messages.value.length - 500)
-      for (const m of removed) seenIds.delete(m.id)
+    if (localAutoFollow.value) {
+      trimToWindow()
     }
     trimTimer = null
   }, 10000)
@@ -323,9 +641,7 @@ watch(
   async () => {
     if (localAutoFollow.value) {
       if (messages.value.length > 600) {
-        const removed = messages.value.slice(0, messages.value.length - 500)
-        messages.value = messages.value.slice(messages.value.length - 500)
-        for (const m of removed) seenIds.delete(m.id)
+        trimToWindow()
       }
       await nextTick()
       scrollToBottom()
@@ -333,7 +649,7 @@ watch(
   },
 )
 
-// ---- Search bar ----------------------------------------------------------
+// ---- Search bar -----------------------------------------------------------
 
 const searchInput = ref<HTMLInputElement | null>(null)
 const searchText = ref('')
@@ -356,16 +672,68 @@ function clearSearch() {
   filter.value = ''
 }
 
-// ---- Selected row --------------------------------------------------------
+// ---- Detail panel ---------------------------------------------------------
 
 const selectedMessage = ref<LogMessage | null>(null)
+const detailVisible = ref(false)
+const copyLabel = ref('Copy')
 
 function onRowClick(msg: LogMessage) {
-  selectedMessage.value = msg
+  if (selectedMessage.value?.id === msg.id) {
+    detailVisible.value = !detailVisible.value
+  } else {
+    selectedMessage.value = msg
+    detailVisible.value = true
+  }
   emit('flume:row-click', msg)
 }
 
-// ---- Prop watchers -------------------------------------------------------
+function closeDetail() {
+  detailVisible.value = false
+}
+
+async function copyRaw() {
+  if (!selectedMessage.value) return
+  try {
+    await navigator.clipboard.writeText(selectedMessage.value.content)
+    copyLabel.value = 'Copied!'
+    setTimeout(() => { copyLabel.value = 'Copy' }, 1500)
+  } catch {
+    // clipboard API may not be available
+  }
+}
+
+const highlightedJson = computed(() => {
+  if (!selectedMessage.value?.is_json || !selectedMessage.value.json_content) return ''
+  try {
+    const raw = JSON.stringify(selectedMessage.value.json_content, null, 2)
+    const escaped = escapeHtml(raw)
+    return escaped.replace(
+      /(&quot;(?:[^&]|&(?!quot;))*&quot;)(\s*:)?|(\b(?:true|false|null)\b)|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,
+      (_match: string, str?: string, colon?: string, bool?: string, num?: string) => {
+        if (str) {
+          if (colon) return `<span class="json-key">${str}</span>${colon}`
+          return `<span class="json-string">${str}</span>`
+        }
+        if (bool) return `<span class="json-bool">${bool}</span>`
+        if (num) return `<span class="json-number">${num}</span>`
+        return _match
+      },
+    )
+  } catch {
+    return ''
+  }
+})
+
+// ---- Keyboard shortcuts ---------------------------------------------------
+
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && detailVisible.value) {
+    closeDetail()
+  }
+}
+
+// ---- Prop watchers --------------------------------------------------------
 
 watch(() => props.theme, (val) => {
   currentTheme.value = val
@@ -376,7 +744,7 @@ watch(() => props.autoFollow, (val) => {
   localAutoFollow.value = val
 })
 
-// ---- Lifecycle -----------------------------------------------------------
+// ---- Lifecycle ------------------------------------------------------------
 
 onMounted(() => {
   if (props.wsUrl) {
@@ -385,15 +753,21 @@ onMounted(() => {
   if (localAutoFollow.value) {
     nextTick(() => scrollToBottom())
   }
+  if (props.baseUrl) {
+    startLabelPolling()
+  }
+  document.addEventListener('keydown', onKeydown)
 })
 
 onUnmounted(() => {
   disconnect()
+  stopLabelPolling()
   cancelTrimTimer()
   if (debounceTimer) clearTimeout(debounceTimer)
+  document.removeEventListener('keydown', onKeydown)
 })
 
-// ---- Public API (defineExpose) ------------------------------------------
+// ---- Public API -----------------------------------------------------------
 
 defineExpose({
   connect,
@@ -450,6 +824,39 @@ defineExpose({
       <button v-if="searchText" class="search-bar__btn" @click="clearSearch" title="Clear">&#x2715;</button>
     </div>
 
+    <!-- Label filter bar -->
+    <div v-if="showLabelBar" class="label-filter">
+      <div class="label-filter__pills">
+        <!-- Pre-filter scope badges (non-removable) -->
+        <template v-for="(val, key) in preFilters" :key="`pre-${key}`">
+          <span class="label-filter__scope-badge">{{ key }}:{{ val }}</span>
+        </template>
+
+        <!-- Interactive label pills -->
+        <template v-for="key in sortedLabelKeys" :key="key">
+          <div class="label-filter__group">
+            <span class="label-filter__key">{{ key }}:</span>
+            <button
+              v-for="val in availableLabels[key]"
+              :key="`${key}:${val}`"
+              class="label-filter__pill"
+              :class="{ 'label-filter__pill--active': activeLabels[key] === val }"
+              @click="toggleLabel(key, val)"
+            >
+              {{ val }}
+            </button>
+          </div>
+        </template>
+        <button
+          v-if="hasActiveLabels"
+          class="label-filter__clear"
+          @click="clearLabels()"
+        >
+          clear
+        </button>
+      </div>
+    </div>
+
     <!-- Log viewer -->
     <div class="log-viewer-wrapper">
       <div class="log-viewer" ref="logContainer" @scroll="onScroll">
@@ -495,6 +902,42 @@ defineExpose({
       </Transition>
     </div>
 
+    <!-- Detail panel -->
+    <Transition name="slide-up">
+      <div v-if="detailVisible && selectedMessage" class="log-detail">
+        <div class="log-detail__header">
+          <span class="log-detail__title">Log Detail</span>
+          <button class="log-detail__close" @click="closeDetail">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div class="log-detail__body">
+          <div class="log-detail__section">
+            <h3>Metadata</h3>
+            <table class="log-detail__meta">
+              <tr><td>Timestamp</td><td>{{ selectedMessage.ts }}</td></tr>
+              <tr><td>Source</td><td>{{ selectedMessage.source }}</td></tr>
+              <tr><td>Origin</td><td>{{ selectedMessage.origin.name }}</td></tr>
+              <tr v-if="selectedMessage.level"><td>Level</td><td>{{ selectedMessage.level }}</td></tr>
+              <tr v-for="(v, k) in selectedMessage.labels" :key="k"><td>{{ k }}</td><td>{{ v }}</td></tr>
+            </table>
+          </div>
+          <div v-if="selectedMessage.is_json" class="log-detail__section">
+            <h3>JSON Content</h3>
+            <!-- eslint-disable-next-line vue/no-v-html -->
+            <pre class="log-detail__json" v-html="highlightedJson"></pre>
+          </div>
+          <div class="log-detail__section">
+            <div class="log-detail__section-header">
+              <h3>Raw</h3>
+              <button class="log-detail__copy" @click="copyRaw">{{ copyLabel }}</button>
+            </div>
+            <pre class="log-detail__raw">{{ selectedMessage.content }}</pre>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
     <!-- Status bar -->
     <div class="status-bar">
       <div class="status-bar__item">
@@ -530,12 +973,6 @@ defineExpose({
 </template>
 
 <style>
-/*
- * All styles are inlined here so they are injected into the shadow DOM.
- * CSS custom properties are declared under :host so they work inside the shadow root.
- * The data-theme attribute is set on the root element inside the shadow DOM.
- */
-
 /* Reset */
 *, *::before, *::after {
   box-sizing: border-box;
@@ -543,47 +980,47 @@ defineExpose({
   padding: 0;
 }
 
-/* Theme tokens — light (default) */
+/* Theme tokens — light (Catppuccin Latte) */
 :host,
 .ilv-root,
 .ilv-root[data-theme="light"] {
-  --flume-bg: #ffffff;
-  --flume-bg-secondary: #f5f5f5;
-  --flume-fg: #1a1a1a;
-  --flume-fg-secondary: #666666;
-  --flume-accent: #2563eb;
-  --flume-border: #e5e5e5;
+  --flume-bg: #eff1f5;
+  --flume-bg-secondary: #e6e9ef;
+  --flume-fg: #4c4f69;
+  --flume-fg-secondary: #6c6f85;
+  --flume-accent: #1e66f5;
+  --flume-border: #ccd0da;
   --flume-font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
   --flume-font-size: 13px;
   --flume-row-height: 24px;
-  --flume-level-debug: #6b7280;
-  --flume-level-info: #2563eb;
-  --flume-level-warn: #d97706;
-  --flume-level-error: #dc2626;
-  --flume-level-fatal: #7c2d12;
-  --flume-bg-hover: #ebebeb;
-  --flume-bg-active: #e0e7ff;
+  --flume-level-debug: #8c8fa1;
+  --flume-level-info: #1e66f5;
+  --flume-level-warn: #df8e1d;
+  --flume-level-error: #d20f39;
+  --flume-level-fatal: #fe640b;
+  --flume-bg-hover: #dce0e8;
+  --flume-bg-active: #bcc0cc;
   --flume-shadow: rgba(0, 0, 0, 0.08);
-  --flume-text-accent: #1d4ed8;
+  --flume-text-accent: #7287fd;
 }
 
-/* Theme tokens — dark */
+/* Theme tokens — dark (Catppuccin Mocha) */
 .ilv-root[data-theme="dark"] {
-  --flume-bg: #0f0f0f;
-  --flume-bg-secondary: #1a1a1a;
-  --flume-fg: #e5e5e5;
-  --flume-fg-secondary: #999999;
-  --flume-accent: #3b82f6;
-  --flume-border: #333333;
-  --flume-level-debug: #9ca3af;
-  --flume-level-info: #60a5fa;
-  --flume-level-warn: #fbbf24;
-  --flume-level-error: #f87171;
-  --flume-level-fatal: #fb923c;
-  --flume-bg-hover: #252525;
-  --flume-bg-active: #1e293b;
+  --flume-bg: #1e1e2e;
+  --flume-bg-secondary: #181825;
+  --flume-fg: #cdd6f4;
+  --flume-fg-secondary: #a6adc8;
+  --flume-accent: #89b4fa;
+  --flume-border: #313244;
+  --flume-level-debug: #9399b2;
+  --flume-level-info: #89b4fa;
+  --flume-level-warn: #f9e2af;
+  --flume-level-error: #f38ba8;
+  --flume-level-fatal: #fab387;
+  --flume-bg-hover: #313244;
+  --flume-bg-active: #45475a;
   --flume-shadow: rgba(0, 0, 0, 0.3);
-  --flume-text-accent: #93c5fd;
+  --flume-text-accent: #b4befe;
 }
 
 /* Root layout */
@@ -618,16 +1055,18 @@ defineExpose({
 .search-bar {
   display: flex;
   align-items: center;
-  height: 32px;
-  padding: 0 8px;
+  height: 38px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--flume-border);
   border-left: 2px solid transparent;
   background-color: var(--flume-bg-secondary);
   font-family: var(--flume-font-family);
   font-size: var(--flume-font-size);
   flex-shrink: 0;
-  gap: 6px;
+  gap: 8px;
   transition: border-color 0.15s;
+  border-radius: 8px;
+  margin: 6px 6px 0;
 }
 
 .search-bar--focused {
@@ -651,7 +1090,7 @@ defineExpose({
   color: var(--flume-fg);
   font-family: var(--flume-font-family);
   font-size: var(--flume-font-size);
-  padding: 4px 0;
+  padding: 6px 4px;
 }
 
 .search-bar__input::placeholder {
@@ -673,8 +1112,8 @@ defineExpose({
   color: var(--flume-fg-secondary);
   font-family: var(--flume-font-family);
   font-size: 11px;
-  padding: 1px 8px;
-  border-radius: 3px;
+  padding: 3px 10px;
+  border-radius: 6px;
   cursor: pointer;
   line-height: 1;
 }
@@ -693,6 +1132,88 @@ defineExpose({
 .search-bar__btn--active:hover {
   background-color: var(--flume-accent);
   color: var(--flume-bg);
+}
+
+/* Label filter bar */
+.label-filter {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--flume-border);
+  background-color: var(--flume-bg-secondary);
+  flex-shrink: 0;
+  overflow-x: auto;
+  border-radius: 8px;
+  margin: 4px 6px 0;
+}
+
+.label-filter__pills {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.label-filter__group {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.label-filter__key {
+  font-size: 11px;
+  color: var(--flume-fg-secondary);
+  font-weight: 600;
+  user-select: none;
+}
+
+.label-filter__scope-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background-color: var(--flume-accent);
+  color: var(--flume-bg);
+  font-weight: 600;
+  user-select: none;
+  opacity: 0.8;
+}
+
+.label-filter__pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--flume-border);
+  border-radius: 6px;
+  background: var(--flume-bg);
+  color: var(--flume-fg);
+  cursor: pointer;
+  font-family: var(--flume-font-family);
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.label-filter__pill:hover {
+  border-color: var(--flume-accent);
+}
+
+.label-filter__pill--active {
+  background-color: var(--flume-accent);
+  color: var(--flume-bg);
+  border-color: var(--flume-accent);
+}
+
+.label-filter__clear {
+  font-size: 10px;
+  padding: 1px 5px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--flume-fg-secondary);
+  cursor: pointer;
+  font-family: var(--flume-font-family);
+  text-decoration: underline;
+}
+
+.label-filter__clear:hover {
+  color: var(--flume-fg);
 }
 
 /* Log viewer */
@@ -828,33 +1349,33 @@ defineExpose({
   text-align: center;
   font-weight: 600;
   font-size: 11px;
-  border-radius: 3px;
-  padding: 1px 4px;
+  border-radius: 5px;
+  padding: 2px 6px;
 }
 
 .log-row__level--debug {
   color: var(--flume-level-debug);
-  background: rgba(107, 114, 128, 0.15);
+  background: color-mix(in srgb, var(--flume-level-debug) 15%, transparent);
 }
 
 .log-row__level--info {
   color: var(--flume-level-info);
-  background: rgba(37, 99, 235, 0.14);
+  background: color-mix(in srgb, var(--flume-level-info) 14%, transparent);
 }
 
 .log-row__level--warn {
   color: var(--flume-level-warn);
-  background: rgba(217, 119, 6, 0.14);
+  background: color-mix(in srgb, var(--flume-level-warn) 14%, transparent);
 }
 
 .log-row__level--error {
   color: var(--flume-level-error);
-  background: rgba(220, 38, 38, 0.16);
+  background: color-mix(in srgb, var(--flume-level-error) 16%, transparent);
 }
 
 .log-row__level--fatal {
   color: var(--flume-level-fatal);
-  background: rgba(124, 45, 18, 0.16);
+  background: color-mix(in srgb, var(--flume-level-fatal) 16%, transparent);
 }
 
 .log-row__source {
@@ -875,19 +1396,192 @@ defineExpose({
   color: var(--flume-fg-secondary);
 }
 
+/* Detail panel */
+.slide-up-enter-active,
+.slide-up-leave-active {
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+.slide-up-enter-from,
+.slide-up-leave-to {
+  transform: translateY(20px);
+  opacity: 0;
+}
+
+.log-detail {
+  flex-shrink: 0;
+  height: 40%;
+  min-height: 120px;
+  max-height: 50vh;
+  display: flex;
+  flex-direction: column;
+  border-top: 2px solid var(--flume-accent);
+  background-color: var(--flume-bg);
+  font-family: var(--flume-font-family);
+  font-size: var(--flume-font-size);
+}
+
+.log-detail__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  height: 34px;
+  background-color: var(--flume-bg-secondary);
+  border-bottom: 1px solid var(--flume-border);
+  flex-shrink: 0;
+}
+
+.log-detail__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--flume-fg);
+  letter-spacing: 0.3px;
+}
+
+.log-detail__close {
+  background: none;
+  border: 1px solid var(--flume-border);
+  color: var(--flume-fg-secondary);
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.log-detail__close:hover {
+  background-color: var(--flume-bg-hover);
+  color: var(--flume-fg);
+}
+
+.log-detail__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+}
+
+.log-detail__section {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--flume-border);
+}
+
+.log-detail__section:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.log-detail__section h3 {
+  margin: 0 0 6px 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--flume-fg-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.log-detail__section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.log-detail__section-header h3 {
+  margin: 0;
+}
+
+.log-detail__copy {
+  background: none;
+  border: 1px solid var(--flume-border);
+  color: var(--flume-fg-secondary);
+  font-family: var(--flume-font-family);
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.log-detail__copy:hover {
+  background-color: var(--flume-bg-hover);
+  color: var(--flume-fg);
+}
+
+.log-detail__meta {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.log-detail__meta td {
+  padding: 2px 12px 2px 0;
+  vertical-align: top;
+}
+
+.log-detail__meta td:first-child {
+  color: var(--flume-fg-secondary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.log-detail__meta td:last-child {
+  color: var(--flume-fg);
+  word-break: break-all;
+}
+
+.log-detail__json,
+.log-detail__raw {
+  margin: 0;
+  padding: 8px;
+  background-color: var(--flume-bg-secondary);
+  border: 1px solid var(--flume-border);
+  border-radius: 6px;
+  font-family: var(--flume-font-family);
+  font-size: 12px;
+  color: var(--flume-fg);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.log-detail__json {
+  border-left: 3px solid var(--flume-accent);
+}
+
+.log-detail__json .json-key {
+  color: var(--flume-accent);
+}
+
+.log-detail__json .json-string {
+  color: var(--flume-level-warn);
+}
+
+.log-detail__json .json-number {
+  color: var(--flume-level-info);
+}
+
+.log-detail__json .json-bool {
+  color: var(--flume-level-error);
+}
+
 /* Status bar */
 .status-bar {
   display: flex;
   align-items: center;
-  height: 28px;
-  padding: 0 8px;
+  height: 34px;
+  padding: 0 12px;
   background-color: var(--flume-bg-secondary);
   border-top: 1px solid var(--flume-border);
   font-family: var(--flume-font-family);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--flume-fg-secondary);
   flex-shrink: 0;
   gap: 0;
+  border-radius: 8px;
+  margin: 0 6px 6px;
 }
 
 .status-bar__item {
@@ -921,11 +1615,11 @@ defineExpose({
 }
 
 .status-bar__dot--connected {
-  background-color: #22c55e;
+  background-color: #a6e3a1;
 }
 
 .status-bar__dot--connecting {
-  background-color: #eab308;
+  background-color: #f9e2af;
   animation: pulse-dot 1.5s ease-in-out infinite;
 }
 
@@ -935,7 +1629,7 @@ defineExpose({
 }
 
 .status-bar__dot--disconnected {
-  background-color: #ef4444;
+  background-color: #f38ba8;
 }
 
 .status-bar__control {
@@ -944,8 +1638,8 @@ defineExpose({
   color: var(--flume-fg-secondary);
   font-family: var(--flume-font-family);
   font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 3px;
+  padding: 3px 10px;
+  border-radius: 6px;
   cursor: pointer;
   line-height: 1;
   display: flex;
@@ -960,10 +1654,10 @@ defineExpose({
 }
 
 .status-bar__item--paused {
-  color: #eab308;
+  color: #f9e2af;
 }
 
-/* Transition */
+/* Transitions */
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 0.2s ease, transform 0.2s ease;
