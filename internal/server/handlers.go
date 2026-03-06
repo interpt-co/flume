@@ -7,9 +7,30 @@ import (
 )
 
 // HandleStatus writes the current server status as JSON.
+// In aggregator mode, accepts optional ?pattern= to return pattern-scoped stats.
 func (m *ClientManager) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(m.Status())
+
+	info := m.Status()
+
+	// In aggregator mode, override buffer stats with pattern-scoped data.
+	if m.registry != nil {
+		patternName := r.URL.Query().Get("pattern")
+		if patternName == "" {
+			names := m.registry.Names()
+			if len(names) > 0 {
+				patternName = names[0]
+			}
+		}
+		if patternName != "" {
+			if p := m.registry.Get(patternName); p != nil {
+				info.BufferUsed = p.Ring().Len()
+				info.BufferCapacity = p.Ring().Cap()
+			}
+		}
+	}
+
+	json.NewEncoder(w).Encode(info)
 }
 
 // HandleLoadRange returns messages from the ring buffer.

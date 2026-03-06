@@ -72,9 +72,18 @@ func (m *ClientManager) HandleWS(w http.ResponseWriter, r *http.Request) {
 	id := uuid.New().String()
 	c := newClient(id, conn, m)
 
-	// If pattern query param specified, subscribe immediately.
-	if patternName := r.URL.Query().Get("pattern"); patternName != "" && m.registry != nil {
-		c.subscribeToPattern(patternName)
+	// Subscribe to pattern: from query param, or default to first available.
+	if m.registry != nil {
+		patternName := r.URL.Query().Get("pattern")
+		if patternName == "" {
+			names := m.registry.Names()
+			if len(names) > 0 {
+				patternName = names[0]
+			}
+		}
+		if patternName != "" {
+			c.subscribeToPattern(patternName)
+		}
 	}
 
 	m.mu.Lock()
