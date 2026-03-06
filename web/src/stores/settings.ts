@@ -35,7 +35,7 @@ export const useSettingsStore = defineStore('settings', () => {
 
   const theme = ref<'light' | 'dark'>(saved.theme ?? 'dark')
   const palette = ref<'default' | 'catppuccin'>(saved.palette ?? 'default')
-  const autoFollow = ref(saved.autoFollow ?? true)
+  const autoFollow = ref(true) // always start following on page load
   const showTimestamp = ref(saved.showTimestamp ?? true)
   const showLevel = ref(saved.showLevel ?? true)
   const showSource = ref(saved.showSource ?? true)
@@ -44,14 +44,14 @@ export const useSettingsStore = defineStore('settings', () => {
     saveToStorage({
       theme: theme.value,
       palette: palette.value,
-      autoFollow: autoFollow.value,
+      autoFollow: true,
       showTimestamp: showTimestamp.value,
       showLevel: showLevel.value,
       showSource: showSource.value,
     })
   }
 
-  watch([theme, palette, autoFollow, showTimestamp, showLevel, showSource], persist)
+  watch([theme, palette, showTimestamp, showLevel, showSource], persist)
 
   function toggleTheme() {
     theme.value = theme.value === 'dark' ? 'light' : 'dark'
