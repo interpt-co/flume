@@ -51,6 +51,12 @@ func (m *ClientManager) HandleLoadRange(w http.ResponseWriter, r *http.Request) 
 	ring := m.ring
 	if m.registry != nil {
 		patternName := r.URL.Query().Get("pattern")
+		if patternName == "" {
+			names := m.registry.Names()
+			if len(names) > 0 {
+				patternName = names[0]
+			}
+		}
 		if patternName != "" {
 			if p := m.registry.Get(patternName); p != nil {
 				ring = p.Ring()

@@ -54,7 +54,8 @@ export const useConnectionStore = defineStore('connection', () => {
   async function loadInitialHistory() {
     const logsStore = useLogsStore()
     try {
-      const statusRes = await fetch('/api/status')
+      const pp = patternParam()
+      const statusRes = await fetch(`/api/status?${pp.replace('&', '')}`)
       const statusData = await statusRes.json()
       const bufUsed = statusData.buffer_used as number
       if (bufUsed === 0) return
@@ -62,7 +63,6 @@ export const useConnectionStore = defineStore('connection', () => {
       const count = Math.min(bufUsed, WINDOW_SIZE)
       const start = bufUsed - count
 
-      const pp = patternParam()
       const res = await fetch(`/api/client/load?start=${start}&count=${count}${pp}`)
       const data = await res.json() as { messages: LogMessage[]; total: number }
       logsStore.setInitialMessages(data.messages, start)
