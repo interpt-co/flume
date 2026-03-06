@@ -228,10 +228,8 @@ const sortedLabelKeys = computed(() => {
   return keys.filter(k => !hiddenLabelKeys.value.has(k)).sort()
 })
 
-const hasPreFilters = computed(() => Object.keys(preFilters.value).length > 0)
-const hasLabels = computed(() => Object.keys(availableLabels.value).length > 0)
 const hasActiveLabels = computed(() => Object.keys(activeLabels.value).length > 0)
-const showLabelBar = computed(() => hasPreFilters.value || hasLabels.value)
+const showLabelBar = computed(() => sortedLabelKeys.value.length > 0)
 
 // ---- Helpers --------------------------------------------------------------
 
@@ -831,11 +829,6 @@ defineExpose({
     <!-- Label filter bar -->
     <div v-if="showLabelBar" class="label-filter">
       <div class="label-filter__pills">
-        <!-- Pre-filter scope badges (non-removable) -->
-        <template v-for="(val, key) in preFilters" :key="`pre-${key}`">
-          <span class="label-filter__scope-badge">{{ key }}:{{ val }}</span>
-        </template>
-
         <!-- Interactive label pills -->
         <template v-for="key in sortedLabelKeys" :key="key">
           <div class="label-filter__group">
