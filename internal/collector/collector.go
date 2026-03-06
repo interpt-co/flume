@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/nxadm/tail"
 	"github.com/paulofilip3/pipeline"
@@ -52,9 +53,25 @@ func (c *Collector) Run(ctx context.Context) error {
 
 	// 1. Start pod watcher.
 	podWatcher := podwatch.NewWatcher()
+
+	// Load static labels for local testing.
+	for key, labels := range c.cfg.StaticLabels {
+		parts := strings.SplitN(key, "/", 2)
+		if len(parts) == 2 {
+			podWatcher.SetLabels(parts[0], parts[1], labels)
+			log.WithFields(log.Fields{
+				"pod": key, "labels": len(labels),
+			}).Debug("collector: loaded static labels")
+		}
+	}
+
 	go func() {
 		if err := podWatcher.Start(ctx, c.nodeName); err != nil {
-			log.WithError(err).Warn("collector: pod watcher failed (labels will be empty)")
+			if len(c.cfg.StaticLabels) > 0 {
+				log.Debug("collector: pod watcher unavailable, using static labels")
+			} else {
+				log.WithError(err).Warn("collector: pod watcher failed (labels will be empty)")
+			}
 		}
 	}()
 
@@ -268,10 +285,13 @@ func tailFile(ctx context.Context, event discovery.FileEvent, podWatcher *podwat
 				}
 			}
 
-			// Add stream as a label.
+			// Add K8s metadata and stream as labels for filtering.
 			if msg.Labels == nil {
 				msg.Labels = make(map[string]string)
 			}
+			msg.Labels["namespace"] = ref.Namespace
+			msg.Labels["pod"] = ref.Pod
+			msg.Labels["container"] = ref.Container
 			msg.Labels["stream"] = assembled.Stream
 
 			select {

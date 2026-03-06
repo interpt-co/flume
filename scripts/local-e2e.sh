@@ -45,6 +45,26 @@ collector:
       selector:
         matchLabels:
           app: worker
+  staticLabels:
+    "default/api-gateway-7f8d9c-abc12":
+      app: api-gateway
+      team: platform
+      env: production
+      version: v2.1.0
+    "production/task-worker-5c4b3a":
+      app: worker
+      team: backend
+      env: production
+      version: v1.8.3
+    "ingress-nginx/nginx-ingress-ctrl-9d8e7f":
+      app: ingress-nginx
+      component: controller
+      env: production
+    "default/payment-svc-2a3b4c":
+      app: payment
+      team: platform
+      env: production
+      version: v3.0.1
 EOF
 
 echo "==> Config written to $CONFIG"

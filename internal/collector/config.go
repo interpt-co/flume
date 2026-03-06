@@ -17,6 +17,9 @@ type Config struct {
 	Aggregator AggregatorRef `yaml:"aggregator"`
 	S3         S3Ref         `yaml:"s3"`
 	Patterns   []pattern.PatternDef `yaml:"patterns"`
+	// StaticLabels provides pod labels for local testing without K8s API.
+	// Key format: "namespace/pod" -> labels map.
+	StaticLabels map[string]map[string]string `yaml:"staticLabels"`
 }
 
 // AggregatorRef holds the gRPC aggregator connection info.
