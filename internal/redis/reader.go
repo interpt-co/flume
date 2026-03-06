@@ -22,6 +22,9 @@ func NewReader(client *Client) *Reader {
 // GetMessages returns up to count messages starting from the given offset
 // (0 = oldest in the sorted set). Messages are ordered oldest-first.
 func (r *Reader) GetMessages(ctx context.Context, pattern string, start, count int) ([]models.LogMessage, error) {
+	if count <= 0 {
+		return nil, nil
+	}
 	key := r.client.msgsKey(pattern)
 	vals, err := r.client.rdb.ZRange(ctx, key, int64(start), int64(start+count-1)).Result()
 	if err != nil {
@@ -80,9 +83,23 @@ func (r *Reader) GetLabels(ctx context.Context, pattern string) (map[string][]st
 	if err != nil {
 		return nil, err
 	}
-	result := make(map[string][]string, len(keys))
+	if len(keys) == 0 {
+		return make(map[string][]string), nil
+	}
+
+	// Pipeline all SMembers calls into a single round trip.
+	pipe := r.client.rdb.Pipeline()
+	cmds := make(map[string]*goredis.StringSliceCmd, len(keys))
 	for _, k := range keys {
-		vals, err := r.client.rdb.SMembers(ctx, r.client.labelValuesKey(pattern, k)).Result()
+		cmds[k] = pipe.SMembers(ctx, r.client.labelValuesKey(pattern, k))
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, err
+	}
+
+	result := make(map[string][]string, len(keys))
+	for k, cmd := range cmds {
+		vals, err := cmd.Result()
 		if err != nil {
 			return nil, err
 		}

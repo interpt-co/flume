@@ -14,21 +14,15 @@ import (
 	"github.com/interpt-co/flume/internal/query"
 )
 
-// Storage is the interface required by the history handler.
-type Storage interface {
-	ReadBefore(ctx context.Context, before time.Time, count int, filter map[string]string) ([]models.LogMessage, error)
-}
-
-// CrossNodeStorage extends Storage with cross-node read capability.
+// CrossNodeStorage is the interface for cross-node S3 reads in the history handler.
 type CrossNodeStorage interface {
-	Storage
+	ReadBefore(ctx context.Context, before time.Time, count int, filter map[string]string) ([]models.LogMessage, error)
 	CrossNodeReadBefore(ctx context.Context, basePrefix, patternName string, nodes []string, before time.Time, count int, filter map[string]string) ([]models.LogMessage, error)
 	DiscoverNodes(ctx context.Context) ([]string, error)
 }
 
 // HistoryHandler serves the /api/history endpoint backed by persistent storage.
 type HistoryHandler struct {
-	storage  Storage
 	manager  *ClientManager
 	xnStore  CrossNodeStorage
 	s3Prefix string
@@ -64,23 +58,6 @@ func (h *HistoryHandler) HandleHistory(w http.ResponseWriter, r *http.Request) {
 	// Dispatcher mode: Redis → S3 fallback.
 	if patternName != "" && h.manager != nil && h.manager.redisReader != nil {
 		msgs := h.unifiedHistory(r.Context(), patternName, before, count, map[string]string(filter))
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(historyResponse{
-			Messages: msgs,
-			HasMore:  len(msgs) == count,
-		}); err != nil {
-			log.WithError(err).Warn("history: failed to encode response")
-		}
-		return
-	}
-
-	// Direct S3 read.
-	if h.storage != nil {
-		msgs, err := h.storage.ReadBefore(r.Context(), before, count, map[string]string(filter))
-		if err != nil {
-			http.Error(w, `{"error":"failed to read history"}`, http.StatusInternalServerError)
-			return
-		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(historyResponse{
 			Messages: msgs,

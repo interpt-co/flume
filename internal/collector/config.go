@@ -47,7 +47,7 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("reading config %s: %w", path, err)
 	}
 
-	// Support nested collector: key or flat structure.
+	// Config must use nested "collector:" key.
 	var wrapper struct {
 		Collector Config `yaml:"collector"`
 	}

@@ -151,6 +151,11 @@ func (c *Collector) Run(ctx context.Context) error {
 
 	// 6. Handle file events.
 	go func() {
+		defer func() {
+			for _, tc := range tailers {
+				tc.cancel()
+			}
+		}()
 		for {
 			select {
 			case <-ctx.Done():

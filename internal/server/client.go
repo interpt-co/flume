@@ -226,6 +226,15 @@ func (c *Client) readPump() {
 			if err := json.Unmarshal(msg.Data, &data); err != nil {
 				continue
 			}
+			if data.Start < 0 {
+				data.Start = 0
+			}
+			if data.Count <= 0 {
+				data.Count = 100
+			}
+			if data.Count > 1000 {
+				data.Count = 1000
+			}
 			c.mu.Lock()
 			pn := c.pattern
 			pre := c.preFilter
@@ -316,9 +325,13 @@ func (c *Client) writePump() {
 
 	for {
 		select {
+		case <-c.connCtx.Done():
+			return
+
 		case msg, ok := <-c.send:
 			if !ok {
 				c.writeMu.Lock()
+				c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				c.writeMu.Unlock()
 				return

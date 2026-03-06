@@ -191,24 +191,21 @@ func ParseHourFromPrefix(hourPrefix, basePrefix string) (time.Time, error) {
 }
 
 // deleteAllUnder lists all objects under a prefix and deletes them in batches.
+// After each delete, it re-lists from scratch to avoid stale continuation tokens.
 func deleteAllUnder(ctx context.Context, client S3Client, bucket, prefix string) error {
-	var continuationToken *string
-
 	for {
 		out, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-			Bucket:            aws.String(bucket),
-			Prefix:            aws.String(prefix),
-			ContinuationToken: continuationToken,
+			Bucket: aws.String(bucket),
+			Prefix: aws.String(prefix),
 		})
 		if err != nil {
 			return err
 		}
 
 		if len(out.Contents) == 0 {
-			break
+			return nil
 		}
 
-		// Build delete batch (max 1000 per DeleteObjects call).
 		ids := make([]s3types.ObjectIdentifier, 0, len(out.Contents))
 		for _, obj := range out.Contents {
 			ids = append(ids, s3types.ObjectIdentifier{Key: obj.Key})
@@ -224,11 +221,5 @@ func deleteAllUnder(ctx context.Context, client S3Client, bucket, prefix string)
 		if err != nil {
 			return fmt.Errorf("DeleteObjects: %w", err)
 		}
-
-		if !aws.ToBool(out.IsTruncated) || out.NextContinuationToken == nil {
-			break
-		}
-		continuationToken = out.NextContinuationToken
 	}
-	return nil
 }

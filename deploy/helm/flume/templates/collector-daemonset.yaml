@@ -52,6 +52,9 @@ spec:
             - name: varlog
               mountPath: {{ .Values.collector.logDir }}
               readOnly: true
+            - name: varlogpods
+              mountPath: /var/log/pods
+              readOnly: true
       volumes:
         - name: config
           configMap:
@@ -59,4 +62,8 @@ spec:
         - name: varlog
           hostPath:
             path: {{ .Values.collector.logDir }}
+            type: Directory
+        - name: varlogpods
+          hostPath:
+            path: /var/log/pods
             type: Directory

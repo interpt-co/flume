@@ -84,6 +84,7 @@ func (a *Assembler) Process(containerID string, ts time.Time, stream string, par
 		if buf.Len()+len(content) > maxPartialBufBytes {
 			log.WithField("container", containerID).Warn("cri: partial buffer overflow, discarding")
 			buf.Reset()
+			return nil
 		}
 		buf.WriteString(content)
 		return nil

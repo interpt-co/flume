@@ -86,6 +86,7 @@ func (m *ClientManager) HandleWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	conn.SetReadLimit(64 * 1024) // 64 KB max inbound frame
 
 	id := uuid.New().String()
 	c := newClient(id, conn, m)

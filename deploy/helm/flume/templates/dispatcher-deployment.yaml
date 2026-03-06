@@ -35,6 +35,9 @@ spec:
             - --redis-db
             - "{{ .Values.redis.db }}"
             {{- end }}
+            {{- if .Values.redis.tls }}
+            - --redis-tls
+            {{- end }}
             - --bulk-window-ms
             - "{{ .Values.dispatcher.bulkWindowMS }}"
             {{- if .Values.s3.enabled }}

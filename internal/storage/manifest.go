@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -162,6 +163,7 @@ func BuildChunkMeta(key string, msgs []models.LogMessage) ChunkMeta {
 			for v := range vals {
 				list = append(list, v)
 			}
+			sort.Strings(list)
 			meta.Labels[k] = list
 		}
 	}

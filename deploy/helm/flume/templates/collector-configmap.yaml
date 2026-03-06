@@ -18,6 +18,9 @@ data:
         {{- if .Values.redis.db }}
         db: {{ .Values.redis.db }}
         {{- end }}
+        {{- if .Values.redis.tls }}
+        useTLS: true
+        {{- end }}
       {{- if .Values.s3.enabled }}
       s3:
         bucket: {{ .Values.s3.bucket }}

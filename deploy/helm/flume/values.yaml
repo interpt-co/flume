@@ -35,6 +35,7 @@ redis:
   addr: "redis:6379"
   password: ""
   db: ""
+  tls: false
 
 s3:
   enabled: false

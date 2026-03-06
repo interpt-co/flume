@@ -18,9 +18,8 @@ type Server struct {
 type ServerOption func(*serverOptions)
 
 type serverOptions struct {
-	storage         Storage
-	crossNodeStore  CrossNodeStorage
-	s3Prefix        string
+	crossNodeStore CrossNodeStorage
+	s3Prefix       string
 }
 
 // WithCrossNodeStorageOption attaches cross-node storage for aggregator history.
@@ -50,7 +49,6 @@ func NewServer(host string, port int, manager *ClientManager, opts ...ServerOpti
 
 	// History endpoint — supports both standalone and aggregator modes.
 	h := &HistoryHandler{
-		storage: so.storage,
 		manager: manager,
 	}
 	if so.crossNodeStore != nil {
@@ -61,10 +59,11 @@ func NewServer(host string, port int, manager *ClientManager, opts ...ServerOpti
 
 	return &Server{
 		httpServer: &http.Server{
-			Addr:        net.JoinHostPort(host, fmt.Sprintf("%d", port)),
-			Handler:     mux,
-			ReadTimeout: 10 * time.Second,
-			IdleTimeout: 120 * time.Second,
+			Addr:         net.JoinHostPort(host, fmt.Sprintf("%d", port)),
+			Handler:      mux,
+			ReadTimeout:  10 * time.Second,
+			WriteTimeout: 30 * time.Second,
+			IdleTimeout:  120 * time.Second,
 		},
 		manager: manager,
 	}
