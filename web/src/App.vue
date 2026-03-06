@@ -8,6 +8,7 @@ import ColumnConfig from './components/ColumnConfig.vue'
 import StatusBar from './components/StatusBar.vue'
 import ThemeToggle from './components/ThemeToggle.vue'
 import PaletteToggle from './components/PaletteToggle.vue'
+import PatternSelector from './components/PatternSelector.vue'
 import { useWebSocket } from './composables/useWebSocket'
 import { useTheme } from './composables/useTheme'
 import { useLabelsStore } from './stores/labels'
@@ -43,6 +44,7 @@ onMounted(() => {
     <header class="flume-header">
       <h1 class="flume-header__title">flume</h1>
       <div class="flume-header__actions">
+        <PatternSelector />
         <ColumnConfig />
         <PaletteToggle />
         <ThemeToggle />

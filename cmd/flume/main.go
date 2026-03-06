@@ -9,255 +9,87 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/paulofilip3/pipeline"
 	"github.com/spf13/cobra"
 
-	"github.com/interpt-co/flume/internal/app"
-	"github.com/interpt-co/flume/internal/config"
-	"github.com/interpt-co/flume/internal/models"
-	"github.com/interpt-co/flume/internal/source"
+	"github.com/interpt-co/flume/internal/aggregator"
+	"github.com/interpt-co/flume/internal/collector"
 )
 
 var rootCmd = &cobra.Command{
 	Use:   "flume",
-	Short: "A real-time log viewer with a web UI",
-	Long:  "flume pipes log streams through a processing pipeline and serves them to a browser-based viewer via WebSocket.",
+	Short: "Kubernetes log collector and aggregator",
+	Long:  "flume collects container logs from Kubernetes nodes and serves them to browser clients via WebSocket.",
 }
 
-var stdinCmd = &cobra.Command{
-	Use:   "stdin",
-	Short: "Read log lines from stdin",
+var collectorCmd = &cobra.Command{
+	Use:   "collector",
+	Short: "Run the DaemonSet log collector",
+	Long:  "Collects container logs from /var/log/containers/, enriches with K8s metadata, and streams to the aggregator.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg := configFromFlags(cmd)
-		src := source.NewStdinSource(os.Stdin)
+		configPath, _ := cmd.Flags().GetString("config")
+		cfg, err := collector.LoadConfig(configPath)
+		if err != nil {
+			return fmt.Errorf("loading config: %w", err)
+		}
+
+		verbose, _ := cmd.Flags().GetBool("verbose")
+		if verbose {
+			cfg.Verbose = true
+		}
 
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		ch, err := src.Start(ctx)
-		if err != nil {
-			return err
-		}
-		return app.New(cfg).Run(ctx, ch)
+		return collector.New(cfg).Run(ctx)
 	},
 }
 
-var followCmd = &cobra.Command{
-	Use:   "follow",
-	Short: "Follow one or more log files (like tail -f)",
+var aggregatorCmd = &cobra.Command{
+	Use:   "aggregator",
+	Short: "Run the central log aggregator",
+	Long:  "Receives log streams from collectors via gRPC and serves them to browser clients.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg := configFromFlags(cmd)
-
-		files, _ := cmd.Flags().GetStringSlice("file")
-		cfg.FilePaths = files
-
-		src := source.NewFileSource(files)
+		cfg := aggregator.Config{
+			Host:         getStringFlag(cmd, "host", "FLUME_HOST", "0.0.0.0"),
+			Port:         getIntFlag(cmd, "port", "FLUME_PORT", 8080),
+			GRPCPort:     getIntFlag(cmd, "grpc-port", "FLUME_GRPC_PORT", 9090),
+			BufferSize:   getIntFlag(cmd, "max-messages", "FLUME_MAX_MESSAGES", 10000),
+			BulkWindowMS: getIntFlag(cmd, "bulk-window-ms", "FLUME_BULK_WINDOW_MS", 100),
+			Verbose:      getBoolFlag(cmd, "verbose", "FLUME_VERBOSE", false),
+			S3Bucket:     getStringFlag(cmd, "s3-bucket", "FLUME_S3_BUCKET", ""),
+			S3Prefix:     getStringFlag(cmd, "s3-prefix", "FLUME_S3_PREFIX", ""),
+			S3Region:     getStringFlag(cmd, "s3-region", "FLUME_S3_REGION", ""),
+			S3Endpoint:   getStringFlag(cmd, "s3-endpoint", "FLUME_S3_ENDPOINT", ""),
+		}
 
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 
-		ch, err := src.Start(ctx)
-		if err != nil {
-			return err
-		}
-		return app.New(cfg).Run(ctx, ch)
-	},
-}
-
-var socketCmd = &cobra.Command{
-	Use:   "socket",
-	Short: "Accept log lines over TCP",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg := configFromFlags(cmd)
-
-		addr := getStringFlag(cmd, "listen", "FLUME_SOCKET_ADDR", cfg.SocketAddr)
-		cfg.SocketAddr = addr
-
-		src := source.NewSocketSource(addr)
-
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer cancel()
-
-		ch, err := src.Start(ctx)
-		if err != nil {
-			return err
-		}
-		return app.New(cfg).Run(ctx, ch)
-	},
-}
-
-var forwardCmd = &cobra.Command{
-	Use:   "forward",
-	Short: "Accept logs from Fluent Bit via Forward protocol",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg := configFromFlags(cmd)
-
-		addr := getStringFlag(cmd, "listen", "FLUME_FORWARD_LISTEN", cfg.ForwardAddr)
-		cfg.ForwardAddr = addr
-
-		src := source.NewForwardSource(addr)
-
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer cancel()
-
-		ch, err := src.Start(ctx)
-		if err != nil {
-			return err
-		}
-		return app.New(cfg).Run(ctx, ch)
-	},
-}
-
-var demoCmd = &cobra.Command{
-	Use:   "demo",
-	Short: "Generate fake log messages for demonstration",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg := configFromFlags(cmd)
-
-		rate := getIntFlag(cmd, "rate", "FLUME_DEMO_RATE", cfg.DemoRate)
-		cfg.DemoRate = rate
-
-		src := source.NewDemoSource(rate)
-
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer cancel()
-
-		ch, err := src.Start(ctx)
-		if err != nil {
-			return err
-		}
-		return app.New(cfg).Run(ctx, ch)
-	},
-}
-
-var aggregateCmd = &cobra.Command{
-	Use:   "aggregate",
-	Short: "Run multiple log sources simultaneously",
-	Long:  "Aggregate logs from multiple sources (forward, socket, file, demo) into a single stream.",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg := configFromFlags(cmd)
-
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer cancel()
-
-		var channels []<-chan models.LogMessage
-
-		forwardAddrs, _ := cmd.Flags().GetStringSlice("forward")
-		for _, addr := range forwardAddrs {
-			ch, err := source.NewForwardSource(addr).Start(ctx)
-			if err != nil {
-				cancel()
-				return fmt.Errorf("forward source %s: %w", addr, err)
-			}
-			channels = append(channels, ch)
-		}
-
-		socketAddrs, _ := cmd.Flags().GetStringSlice("socket")
-		for _, addr := range socketAddrs {
-			ch, err := source.NewSocketSource(addr).Start(ctx)
-			if err != nil {
-				cancel()
-				return fmt.Errorf("socket source %s: %w", addr, err)
-			}
-			channels = append(channels, ch)
-		}
-
-		files, _ := cmd.Flags().GetStringSlice("file")
-		if len(files) > 0 {
-			ch, err := source.NewFileSource(files).Start(ctx)
-			if err != nil {
-				cancel()
-				return fmt.Errorf("file source: %w", err)
-			}
-			channels = append(channels, ch)
-		}
-
-		useDemo, _ := cmd.Flags().GetBool("demo")
-		if useDemo {
-			rate := getIntFlag(cmd, "rate", "FLUME_DEMO_RATE", cfg.DemoRate)
-			cfg.DemoRate = rate
-			ch, err := source.NewDemoSource(rate).Start(ctx)
-			if err != nil {
-				cancel()
-				return fmt.Errorf("demo source: %w", err)
-			}
-			channels = append(channels, ch)
-		}
-
-		if len(channels) == 0 {
-			return fmt.Errorf("at least one source is required (use --forward, --socket, --file, or --demo)")
-		}
-
-		merged := pipeline.Merge(ctx, channels...)
-		return app.New(cfg).Run(ctx, merged)
+		return aggregator.New(cfg).Run(ctx)
 	},
 }
 
 func init() {
-	// Persistent flags on root command.
-	rootCmd.PersistentFlags().Int("port", 8080, "HTTP server port")
-	rootCmd.PersistentFlags().String("host", "0.0.0.0", "HTTP server bind address")
-	rootCmd.PersistentFlags().Int("max-messages", 10000, "Ring buffer capacity")
-	rootCmd.PersistentFlags().Int("bulk-window-ms", 100, "WebSocket flush interval in milliseconds")
+	// Persistent flags shared by all commands.
 	rootCmd.PersistentFlags().Bool("verbose", false, "Enable verbose (debug) logging")
 
-	// S3 storage persistent flags.
-	rootCmd.PersistentFlags().String("s3-bucket", "", "S3 bucket for log persistence")
-	rootCmd.PersistentFlags().String("s3-prefix", "", "S3 key prefix")
-	rootCmd.PersistentFlags().String("s3-region", "", "AWS region")
-	rootCmd.PersistentFlags().String("s3-endpoint", "", "Custom S3 endpoint (MinIO, localstack)")
-	rootCmd.PersistentFlags().String("s3-flush-interval", "10s", "S3 flush interval")
-	rootCmd.PersistentFlags().Int("s3-flush-count", 1000, "S3 flush message count threshold")
-	rootCmd.PersistentFlags().String("s3-partition-label", "", "Partition S3 keys by this label")
-	rootCmd.PersistentFlags().String("s3-retention", "0", "S3 data retention period (e.g. 72h, 7d). 0 = disabled")
+	// Collector flags.
+	collectorCmd.Flags().String("config", "/etc/flume/config.yaml", "Path to collector config YAML")
 
-	// follow command flags.
-	followCmd.Flags().StringSlice("file", nil, "File paths to follow (can be repeated)")
-	followCmd.MarkFlagRequired("file")
+	// Aggregator flags.
+	aggregatorCmd.Flags().Int("port", 8080, "HTTP server port")
+	aggregatorCmd.Flags().String("host", "0.0.0.0", "HTTP server bind address")
+	aggregatorCmd.Flags().Int("grpc-port", 9090, "gRPC server port")
+	aggregatorCmd.Flags().Int("max-messages", 10000, "Per-pattern ring buffer capacity")
+	aggregatorCmd.Flags().Int("bulk-window-ms", 100, "WebSocket flush interval in milliseconds")
+	aggregatorCmd.Flags().String("s3-bucket", "", "S3 bucket for log history (read-only)")
+	aggregatorCmd.Flags().String("s3-prefix", "", "S3 key prefix")
+	aggregatorCmd.Flags().String("s3-region", "", "AWS region")
+	aggregatorCmd.Flags().String("s3-endpoint", "", "Custom S3 endpoint (MinIO, localstack)")
 
-	// socket command flags.
-	socketCmd.Flags().String("listen", ":9999", "TCP address to listen on")
-
-	// forward command flags.
-	forwardCmd.Flags().String("listen", ":24224", "TCP address to listen on for Forward protocol")
-
-	// demo command flags.
-	demoCmd.Flags().Int("rate", 10, "Messages per second")
-
-	// aggregate command flags.
-	aggregateCmd.Flags().StringSlice("forward", nil, "Forward protocol addresses (can be repeated)")
-	aggregateCmd.Flags().StringSlice("socket", nil, "TCP socket addresses (can be repeated)")
-	aggregateCmd.Flags().StringSlice("file", nil, "File paths to follow (can be repeated)")
-	aggregateCmd.Flags().Bool("demo", false, "Include demo log generator")
-	aggregateCmd.Flags().Int("rate", 10, "Demo messages per second (used with --demo)")
-
-	rootCmd.AddCommand(stdinCmd, followCmd, socketCmd, forwardCmd, demoCmd, aggregateCmd)
+	rootCmd.AddCommand(collectorCmd, aggregatorCmd)
 }
 
-// configFromFlags builds a Config from cobra command flags with env var fallback.
-func configFromFlags(cmd *cobra.Command) config.Config {
-	cfg := config.DefaultConfig()
-
-	cfg.Port = getIntFlag(cmd, "port", "FLUME_PORT", cfg.Port)
-	cfg.Host = getStringFlag(cmd, "host", "FLUME_HOST", cfg.Host)
-	cfg.MaxMessages = getIntFlag(cmd, "max-messages", "FLUME_MAX_MESSAGES", cfg.MaxMessages)
-	cfg.BulkWindowMS = getIntFlag(cmd, "bulk-window-ms", "FLUME_BULK_WINDOW_MS", cfg.BulkWindowMS)
-	cfg.Verbose = getBoolFlag(cmd, "verbose", "FLUME_VERBOSE", cfg.Verbose)
-
-	// S3 storage flags.
-	cfg.S3Bucket = getStringFlag(cmd, "s3-bucket", "FLUME_S3_BUCKET", cfg.S3Bucket)
-	cfg.S3Prefix = getStringFlag(cmd, "s3-prefix", "FLUME_S3_PREFIX", cfg.S3Prefix)
-	cfg.S3Region = getStringFlag(cmd, "s3-region", "FLUME_S3_REGION", cfg.S3Region)
-	cfg.S3Endpoint = getStringFlag(cmd, "s3-endpoint", "FLUME_S3_ENDPOINT", cfg.S3Endpoint)
-	cfg.S3FlushInterval = getDurationFlag(cmd, "s3-flush-interval", "FLUME_S3_FLUSH_INTERVAL", cfg.S3FlushInterval)
-	cfg.S3FlushCount = getIntFlag(cmd, "s3-flush-count", "FLUME_S3_FLUSH_COUNT", cfg.S3FlushCount)
-	cfg.S3PartitionLabel = getStringFlag(cmd, "s3-partition-label", "FLUME_S3_PARTITION_LABEL", cfg.S3PartitionLabel)
-	cfg.S3Retention = getDurationFlag(cmd, "s3-retention", "FLUME_S3_RETENTION", cfg.S3Retention)
-
-	return cfg
-}
-
-// getIntFlag returns the flag value if changed, else the env var if set, else the fallback.
 func getIntFlag(cmd *cobra.Command, flag, envVar string, fallback int) int {
 	if cmd.Flags().Changed(flag) {
 		v, _ := cmd.Flags().GetInt(flag)
@@ -271,7 +103,6 @@ func getIntFlag(cmd *cobra.Command, flag, envVar string, fallback int) int {
 	return fallback
 }
 
-// getStringFlag returns the flag value if changed, else the env var if set, else the fallback.
 func getStringFlag(cmd *cobra.Command, flag, envVar string, fallback string) string {
 	if cmd.Flags().Changed(flag) {
 		v, _ := cmd.Flags().GetString(flag)
@@ -283,8 +114,6 @@ func getStringFlag(cmd *cobra.Command, flag, envVar string, fallback string) str
 	return fallback
 }
 
-// getDurationFlag returns the flag value (parsed as duration string) if changed,
-// else the env var if set, else the fallback.
 func getDurationFlag(cmd *cobra.Command, flag, envVar string, fallback time.Duration) time.Duration {
 	if cmd.Flags().Changed(flag) {
 		v, _ := cmd.Flags().GetString(flag)
@@ -300,7 +129,6 @@ func getDurationFlag(cmd *cobra.Command, flag, envVar string, fallback time.Dura
 	return fallback
 }
 
-// getBoolFlag returns the flag value if changed, else the env var if set, else the fallback.
 func getBoolFlag(cmd *cobra.Command, flag, envVar string, fallback bool) bool {
 	if cmd.Flags().Changed(flag) {
 		v, _ := cmd.Flags().GetBool(flag)

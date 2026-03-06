@@ -1,13 +1,22 @@
+export interface KubeMeta {
+  namespace: string
+  pod: string
+  container: string
+  pod_uid?: string
+  node_name?: string
+}
+
 export interface LogMessage {
   id: string
   content: string
   json_content?: unknown
   is_json: boolean
   ts: string // ISO timestamp
-  source: 'loki' | 'stdin' | 'file' | 'socket' | 'demo' | 'forward'
+  source: 'loki' | 'stdin' | 'file' | 'socket' | 'demo' | 'forward' | 'container'
   origin: Origin
   labels?: Record<string, string>
   level?: string
+  kube?: KubeMeta
 }
 
 export interface Origin {
@@ -23,6 +32,8 @@ export interface WSMessage {
 export interface ClientJoinedData {
   client_id: string
   buffer_size: number
+  patterns?: string[]
+  default_pattern?: string
 }
 
 export interface LogBulkData {
@@ -35,4 +46,18 @@ export interface StatusData {
   messages: number
   buffer_used: number
   buffer_capacity: number
+}
+
+export interface PatternChangedData {
+  pattern: string
+  buffer_size: number
+  buffer_used: number
+}
+
+export interface PatternInfo {
+  name: string
+  buffer_used: number
+  buffer_capacity: number
+  message_count: number
+  subscriber_count: number
 }

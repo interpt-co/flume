@@ -2,7 +2,8 @@ import { ref, onUnmounted } from 'vue'
 import { useConnectionStore } from '../stores/connection'
 import { useLogsStore } from '../stores/logs'
 import { useLabelsStore } from '../stores/labels'
-import type { WSMessage, ClientJoinedData, LogBulkData, StatusData } from '../types'
+import { usePatternsStore } from '../stores/patterns'
+import type { WSMessage, ClientJoinedData, LogBulkData, StatusData, PatternChangedData } from '../types'
 
 export function useWebSocket(url: string) {
   const isConnected = ref(false)
@@ -14,6 +15,7 @@ export function useWebSocket(url: string) {
   const connectionStore = useConnectionStore()
   const logsStore = useLogsStore()
   const labelsStore = useLabelsStore()
+  const patternsStore = usePatternsStore()
 
   function connect() {
     if (ws) {
@@ -53,6 +55,9 @@ export function useWebSocket(url: string) {
       case 'client_joined': {
         const data = msg.data as ClientJoinedData
         connectionStore.setConnected(data.client_id, data.buffer_size)
+        if (data.patterns) {
+          patternsStore.setAvailable(data.patterns, data.default_pattern)
+        }
         connectionStore.loadInitialHistory()
         break
       }
@@ -64,6 +69,14 @@ export function useWebSocket(url: string) {
       case 'status': {
         const data = msg.data as StatusData
         connectionStore.updateStats(data)
+        break
+      }
+      case 'pattern_changed': {
+        const data = msg.data as PatternChangedData
+        patternsStore.current = data.pattern
+        logsStore.clear()
+        labelsStore.fetchLabels()
+        connectionStore.loadInitialHistory()
         break
       }
     }
@@ -112,8 +125,13 @@ export function useWebSocket(url: string) {
     send({ type: 'set_filter', data: { labels } })
   }
 
+  function selectPattern(name: string) {
+    send({ type: 'set_pattern', data: { pattern: name } })
+  }
+
   connectionStore.registerControls(pause, resume)
   labelsStore.registerSendFilter(setLabelFilter)
+  patternsStore.registerSelectPattern(selectPattern)
 
   onUnmounted(() => {
     disconnect()
@@ -126,6 +144,7 @@ export function useWebSocket(url: string) {
     pause,
     resume,
     setLabelFilter,
+    selectPattern,
     isConnected,
   }
 }

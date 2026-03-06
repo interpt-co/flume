@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "flume.fullname" . }}-aggregator
+  labels:
+    {{- include "flume.labels" . | nindent 4 }}
+    app.kubernetes.io/component: aggregator
+spec:
+  replicas: {{ .Values.aggregator.replicas }}
+  selector:
+    matchLabels:
+      {{- include "flume.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: aggregator
+  template:
+    metadata:
+      labels:
+        {{- include "flume.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: aggregator
+    spec:
+      containers:
+        - name: aggregator
+          image: "{{ .Values.image.repository }}:{{ include "flume.imageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - aggregator
+            - --port
+            - "{{ .Values.aggregator.port }}"
+            - --grpc-port
+            - "{{ .Values.aggregator.grpcPort }}"
+            - --max-messages
+            - "{{ .Values.aggregator.maxMessages }}"
+            {{- if .Values.s3.enabled }}
+            - --s3-bucket
+            - "{{ .Values.s3.bucket }}"
+            - --s3-prefix
+            - "{{ .Values.s3.prefix }}"
+            - --s3-region
+            - "{{ .Values.s3.region }}"
+            {{- if .Values.s3.endpoint }}
+            - --s3-endpoint
+            - "{{ .Values.s3.endpoint }}"
+            {{- end }}
+            {{- end }}
+            - --verbose
+          ports:
+            - name: http
+              containerPort: {{ .Values.aggregator.port }}
+              protocol: TCP
+            - name: grpc
+              containerPort: {{ .Values.aggregator.grpcPort }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /api/status
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /api/status
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          {{- with .Values.aggregator.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}

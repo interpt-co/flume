@@ -456,6 +456,126 @@ func PartitionedHourPrefix(prefix, partition string, t time.Time) string {
 	)
 }
 
+// NodePatternPrefix returns the S3 prefix for a specific node and pattern.
+// Layout: {prefix}/{node}/{pattern}
+func NodePatternPrefix(prefix, node, pattern string) string {
+	return fmt.Sprintf("%s/%s/%s",
+		strings.TrimRight(prefix, "/"),
+		node, pattern,
+	)
+}
+
+// NodePatternChunkKey builds the S3 key scoped to a node and pattern.
+// Layout: {prefix}/{node}/{pattern}/{YYYY}/{MM}/{DD}/{HH}/chunk-{unix_ms}.json.gz
+func NodePatternChunkKey(prefix, node, pattern string, t time.Time) string {
+	return ChunkKey(NodePatternPrefix(prefix, node, pattern), t)
+}
+
+// NodePatternHourPrefix returns the S3 prefix for a node+pattern's hour.
+// Layout: {prefix}/{node}/{pattern}/{YYYY}/{MM}/{DD}/{HH}/
+func NodePatternHourPrefix(prefix, node, pattern string, t time.Time) string {
+	return HourPrefix(NodePatternPrefix(prefix, node, pattern), t)
+}
+
+// CrossNodeReadBefore reads historical logs across multiple nodes for a given
+// pattern. For each hour (walking backward), it fans out reads to all nodes
+// in parallel, merges results, and returns up to count messages newest-first.
+func (s *S3Storage) CrossNodeReadBefore(ctx context.Context, basePrefix, patternName string, nodes []string, before time.Time, count int, filter map[string]string) ([]models.LogMessage, error) {
+	matcher := query.LabelMatcher(filter)
+	var result []models.LogMessage
+
+	cur := before.UTC()
+	limit := cur.Add(-7 * 24 * time.Hour)
+
+	for cur.After(limit) && len(result) < count {
+		type nodeResult struct {
+			msgs []models.LogMessage
+			err  error
+		}
+		ch := make(chan nodeResult, len(nodes))
+
+		for _, node := range nodes {
+			node := node
+			go func() {
+				prefix := NodePatternHourPrefix(basePrefix, node, patternName, cur)
+				keys, err := s.listKeys(ctx, prefix)
+				if err != nil {
+					ch <- nodeResult{err: err}
+					return
+				}
+				sort.Sort(sort.Reverse(sort.StringSlice(keys)))
+
+				var msgs []models.LogMessage
+				for _, key := range keys {
+					chunk, err := s.readChunk(ctx, key)
+					if err != nil {
+						log.WithError(err).WithField("key", key).Warn("storage: cross-node read chunk error")
+						continue
+					}
+					for _, m := range chunk {
+						if m.Timestamp.Before(before) && matcher.Matches(m) {
+							msgs = append(msgs, m)
+						}
+					}
+				}
+				ch <- nodeResult{msgs: msgs}
+			}()
+		}
+
+		// Collect all node results.
+		var hourMsgs []models.LogMessage
+		for range nodes {
+			nr := <-ch
+			if nr.err != nil {
+				log.WithError(nr.err).Warn("storage: cross-node hour scan error")
+				continue
+			}
+			hourMsgs = append(hourMsgs, nr.msgs...)
+		}
+
+		// Sort newest-first and append.
+		sort.Slice(hourMsgs, func(i, j int) bool {
+			return hourMsgs[i].Timestamp.After(hourMsgs[j].Timestamp)
+		})
+		for _, m := range hourMsgs {
+			if len(result) >= count {
+				break
+			}
+			result = append(result, m)
+		}
+
+		cur = cur.Truncate(time.Hour).Add(-time.Hour)
+	}
+
+	return result, nil
+}
+
+// DiscoverNodes lists node directories under {prefix}/ in S3.
+func (s *S3Storage) DiscoverNodes(ctx context.Context) ([]string, error) {
+	prefix := strings.TrimRight(s.cfg.Prefix, "/") + "/"
+	delimiter := "/"
+
+	out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket:    aws.String(s.cfg.Bucket),
+		Prefix:    aws.String(prefix),
+		Delimiter: aws.String(delimiter),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var nodes []string
+	for _, cp := range out.CommonPrefixes {
+		p := aws.ToString(cp.Prefix)
+		p = strings.TrimPrefix(p, prefix)
+		p = strings.TrimSuffix(p, "/")
+		if p != "" {
+			nodes = append(nodes, p)
+		}
+	}
+	return nodes, nil
+}
+
 // MarshalGzip serializes messages to a gzipped JSON array.
 func MarshalGzip(msgs []models.LogMessage) ([]byte, error) {
 	jsonData, err := json.Marshal(msgs)

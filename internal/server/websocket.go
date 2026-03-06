@@ -10,6 +10,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/interpt-co/flume/internal/buffer"
 	"github.com/interpt-co/flume/internal/models"
+	"github.com/interpt-co/flume/internal/pattern"
 )
 
 // StatusInfo holds runtime status information.
@@ -25,12 +26,13 @@ type StatusInfo struct {
 type ClientManager struct {
 	mu       sync.RWMutex
 	clients  map[string]*Client
-	ring     *buffer.Ring[models.LogMessage]
-	bulkMS   int    // flush interval in milliseconds
-	msgCount uint64 // total messages received (atomic)
+	ring     *buffer.Ring[models.LogMessage] // used in standalone mode
+	registry *pattern.Registry               // used in aggregator mode
+	bulkMS   int                             // flush interval in milliseconds
+	msgCount uint64                          // total messages received (atomic)
 }
 
-// NewClientManager creates a new ClientManager.
+// NewClientManager creates a new ClientManager backed by a single ring buffer.
 // bulkWindowMS controls how often batched messages are flushed to clients
 // (default: 100ms if zero).
 func NewClientManager(ring *buffer.Ring[models.LogMessage], bulkWindowMS int) *ClientManager {
@@ -41,6 +43,18 @@ func NewClientManager(ring *buffer.Ring[models.LogMessage], bulkWindowMS int) *C
 		clients: make(map[string]*Client),
 		ring:    ring,
 		bulkMS:  bulkWindowMS,
+	}
+}
+
+// NewClientManagerWithRegistry creates a pattern-aware ClientManager for the aggregator.
+func NewClientManagerWithRegistry(registry *pattern.Registry, bulkWindowMS int) *ClientManager {
+	if bulkWindowMS <= 0 {
+		bulkWindowMS = 100
+	}
+	return &ClientManager{
+		clients:  make(map[string]*Client),
+		registry: registry,
+		bulkMS:   bulkWindowMS,
 	}
 }
 
@@ -58,17 +72,32 @@ func (m *ClientManager) HandleWS(w http.ResponseWriter, r *http.Request) {
 	id := uuid.New().String()
 	c := newClient(id, conn, m)
 
+	// If pattern query param specified, subscribe immediately.
+	if patternName := r.URL.Query().Get("pattern"); patternName != "" && m.registry != nil {
+		c.subscribeToPattern(patternName)
+	}
+
 	m.mu.Lock()
 	m.clients[id] = c
 	m.mu.Unlock()
 
-	// Send client_joined message.
+	// Build client_joined data.
+	joined := clientJoinedData{
+		ClientID:   id,
+		BufferSize: m.bufferCap(),
+	}
+	if m.registry != nil {
+		joined.Patterns = m.registry.Names()
+		if c.pattern != "" {
+			joined.DefaultPattern = c.pattern
+		} else if len(joined.Patterns) > 0 {
+			joined.DefaultPattern = joined.Patterns[0]
+		}
+	}
+
 	c.writeJSON(wsMessage{
 		Type: "client_joined",
-		Data: mustMarshal(clientJoinedData{
-			ClientID:   id,
-			BufferSize: m.ring.Cap(),
-		}),
+		Data: mustMarshal(joined),
 	})
 
 	go c.readPump()
@@ -78,16 +107,22 @@ func (m *ClientManager) HandleWS(w http.ResponseWriter, r *http.Request) {
 // removeClient unregisters a client and closes its send channel.
 func (m *ClientManager) removeClient(id string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if c, ok := m.clients[id]; ok {
+	c, ok := m.clients[id]
+	if ok {
+		// Unsubscribe from pattern if subscribed.
+		if c.pattern != "" && m.registry != nil {
+			if p := m.registry.Get(c.pattern); p != nil {
+				p.Unsubscribe(id)
+			}
+		}
 		close(c.send)
 		delete(m.clients, id)
 	}
+	m.mu.Unlock()
 }
 
 // ConsumeLoop reads messages from the pipeline output channel and distributes
-// them to all connected clients. The ring buffer is populated by a pipeline
-// stage, so ConsumeLoop only handles broadcasting.
+// them to all connected clients. Used in standalone mode (not aggregator).
 // It blocks until ctx is cancelled or the messages channel is closed.
 func (m *ClientManager) ConsumeLoop(ctx context.Context, messages <-chan models.LogMessage) {
 	for {
@@ -123,7 +158,28 @@ func (m *ClientManager) Status() StatusInfo {
 	return StatusInfo{
 		Clients:        clientCount,
 		Messages:       m.MessageCount(),
-		BufferUsed:     m.ring.Len(),
-		BufferCapacity: m.ring.Cap(),
+		BufferUsed:     m.bufferLen(),
+		BufferCapacity: m.bufferCap(),
 	}
+}
+
+// bufferCap returns the ring buffer capacity (standalone or first pattern).
+func (m *ClientManager) bufferCap() int {
+	if m.ring != nil {
+		return m.ring.Cap()
+	}
+	return 0
+}
+
+// bufferLen returns the ring buffer usage (standalone mode).
+func (m *ClientManager) bufferLen() int {
+	if m.ring != nil {
+		return m.ring.Len()
+	}
+	return 0
+}
+
+// Registry returns the pattern registry, or nil in standalone mode.
+func (m *ClientManager) Registry() *pattern.Registry {
+	return m.registry
 }

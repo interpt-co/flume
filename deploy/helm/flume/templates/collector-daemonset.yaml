@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "flume.fullname" . }}-collector
+  labels:
+    {{- include "flume.labels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+spec:
+  selector:
+    matchLabels:
+      {{- include "flume.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: collector
+  template:
+    metadata:
+      labels:
+        {{- include "flume.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: collector
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/collector-configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "flume.serviceAccountName" . }}
+      {{- with .Values.collector.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.collector.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: collector
+          image: "{{ .Values.image.repository }}:{{ include "flume.imageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - collector
+            - --config
+            - /etc/flume/config.yaml
+            - --verbose
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          {{- with .Values.collector.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/flume
+              readOnly: true
+            - name: varlog
+              mountPath: {{ .Values.collector.logDir }}
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "flume.fullname" . }}-collector
+        - name: varlog
+          hostPath:
+            path: {{ .Values.collector.logDir }}
+            type: Directory
