@@ -520,3 +520,27 @@ func TestLoadRange(t *testing.T) {
 		t.Fatalf("expected 2 messages from load_range, got %d", len(data.Messages))
 	}
 }
+
+func TestWebSocketAuthDenied(t *testing.T) {
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(struct {
+			Allowed bool   `json:"allowed"`
+			Reason  string `json:"reason"`
+		}{false, "forbidden"})
+	}))
+	defer authServer.Close()
+
+	mgr := newTestManager(1000)
+	mgr.SetAuthConfig(&AuthConfig{URL: authServer.URL, Timeout: 5 * time.Second})
+	ts := newTestHTTPServer(t, mgr)
+	defer ts.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws?filter=ns:prod"
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err == nil {
+		t.Fatal("expected dial to fail")
+	}
+	if resp != nil && resp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", resp.StatusCode)
+	}
+}

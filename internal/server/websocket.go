@@ -31,6 +31,7 @@ type ClientManager struct {
 	registry *pattern.Registry               // used in aggregator mode
 	bulkMS   int                             // flush interval in milliseconds
 	msgCount uint64                          // total messages received (atomic)
+	auth     *AuthConfig
 }
 
 // NewClientManager creates a new ClientManager backed by a single ring buffer.
@@ -59,12 +60,31 @@ func NewClientManagerWithRegistry(registry *pattern.Registry, bulkWindowMS int) 
 	}
 }
 
+// SetAuthConfig sets the auth callback configuration for WebSocket upgrades.
+func (m *ClientManager) SetAuthConfig(ac *AuthConfig) {
+	m.auth = ac
+}
+
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
 // HandleWS upgrades an HTTP connection to a WebSocket and registers the client.
 func (m *ClientManager) HandleWS(w http.ResponseWriter, r *http.Request) {
+	// Parse pre-filter from query params.
+	var preFilter map[string]string
+	if filterStr := r.URL.Query().Get("filter"); filterStr != "" {
+		preFilter = map[string]string(query.ParseLabels(filterStr))
+	}
+
+	patternName := r.URL.Query().Get("pattern")
+
+	// Auth callback (before WebSocket upgrade).
+	if allowed, reason := m.auth.Check(r, preFilter, patternName); !allowed {
+		http.Error(w, reason, http.StatusForbidden)
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -72,15 +92,10 @@ func (m *ClientManager) HandleWS(w http.ResponseWriter, r *http.Request) {
 
 	id := uuid.New().String()
 	c := newClient(id, conn, m)
-
-	// Parse pre-filter from query params (immutable for the lifetime of the connection).
-	if filterStr := r.URL.Query().Get("filter"); filterStr != "" {
-		c.preFilter = map[string]string(query.ParseLabels(filterStr))
-	}
+	c.preFilter = preFilter
 
 	// Subscribe to pattern: from query param, or default to first available.
 	if m.registry != nil {
-		patternName := r.URL.Query().Get("pattern")
 		if patternName == "" {
 			names := m.registry.Names()
 			if len(names) > 0 {
