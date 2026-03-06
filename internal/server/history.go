@@ -214,6 +214,14 @@ func (m *ClientManager) HandleLabels(w http.ResponseWriter, r *http.Request) {
 		result[k] = list
 	}
 
+	// Remove pre-filter keys from the response.
+	preFilter := query.ParseLabels(r.URL.Query().Get("filter"))
+	if len(preFilter) > 0 {
+		for k := range preFilter {
+			delete(result, k)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
 }
