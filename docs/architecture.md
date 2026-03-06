@@ -122,7 +122,7 @@ Patterns are label-based routing rules that group log messages. Each pattern:
 - Has independent **S3 partitioning** (one S3 key prefix per pattern)
 - Tracks **subscribers** per dispatcher (WebSocket clients watching this pattern)
 
-The Collector evaluates patterns locally via the Dispatcher. A single log message can match multiple patterns and be routed to all of them.
+The Collector evaluates patterns locally via the fanout package. A single log message can match multiple patterns and be routed to all of them.
 
 ## WebSocket Protocol
 

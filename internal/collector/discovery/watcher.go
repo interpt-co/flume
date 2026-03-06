@@ -90,14 +90,22 @@ func WatchDir(ctx context.Context, dir string) (<-chan FileEvent, error) {
 					if err != nil {
 						continue
 					}
-					ch <- FileEvent{Type: FileAdded, Path: event.Name, Ref: ref}
+					select {
+					case ch <- FileEvent{Type: FileAdded, Path: event.Name, Ref: ref}:
+					case <-ctx.Done():
+						return
+					}
 				}
 				if event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
 					ref, err := ParseFilename(event.Name)
 					if err != nil {
 						continue
 					}
-					ch <- FileEvent{Type: FileRemoved, Path: event.Name, Ref: ref}
+					select {
+					case ch <- FileEvent{Type: FileRemoved, Path: event.Name, Ref: ref}:
+					case <-ctx.Done():
+						return
+					}
 				}
 			case err, ok := <-watcher.Errors:
 				if !ok {

@@ -132,7 +132,7 @@ func decodePubSubPayload(payload string) ([]models.LogMessage, error) {
 	return msgs, nil
 }
 
-// SubscribeRaw returns a channel of raw *goredis.Message for lower-level access.
-func (s *Subscriber) SubscribeRaw(ctx context.Context, pattern string) *goredis.PubSub {
+// subscribeRaw returns a raw *goredis.PubSub for testing.
+func (s *Subscriber) subscribeRaw(ctx context.Context, pattern string) *goredis.PubSub {
 	return s.client.rdb.Subscribe(ctx, s.client.channelKey(pattern))
 }

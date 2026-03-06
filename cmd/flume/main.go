@@ -74,11 +74,9 @@ var dispatcherCmd = &cobra.Command{
 }
 
 func init() {
-	// Persistent flags shared by all commands.
-	rootCmd.PersistentFlags().Bool("verbose", false, "Enable verbose (debug) logging")
-
 	// Collector flags.
 	collectorCmd.Flags().String("config", "/etc/flume/config.yaml", "Path to collector config YAML")
+	collectorCmd.Flags().Bool("verbose", false, "Enable verbose (debug) logging")
 
 	// Dispatcher flags.
 	dispatcherCmd.Flags().Int("port", 8080, "HTTP server port")
@@ -93,6 +91,7 @@ func init() {
 	dispatcherCmd.Flags().String("s3-endpoint", "", "Custom S3 endpoint (MinIO, localstack)")
 	dispatcherCmd.Flags().String("auth-url", "", "Auth callback URL (POST) for WebSocket upgrade authorization")
 	dispatcherCmd.Flags().String("auth-timeout", "5s", "Timeout for auth callback requests")
+	dispatcherCmd.Flags().Bool("verbose", false, "Enable verbose (debug) logging")
 
 	rootCmd.AddCommand(collectorCmd, dispatcherCmd)
 }

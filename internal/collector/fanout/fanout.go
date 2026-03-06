@@ -3,6 +3,8 @@ package fanout
 import (
 	"sync"
 
+	log "github.com/sirupsen/logrus"
+
 	"github.com/interpt-co/flume/internal/models"
 	"github.com/interpt-co/flume/internal/pattern"
 )
@@ -46,14 +48,16 @@ func (d *Dispatcher) Dispatch(msg models.LogMessage) {
 		if dest.S3 != nil {
 			select {
 			case dest.S3 <- msg:
-			default: // non-blocking
+			default:
+				log.WithField("pattern", dest.Pattern.Name).Warn("fanout: S3 channel full, dropping message")
 			}
 		}
 
 		if dest.Redis != nil {
 			select {
 			case dest.Redis <- msg:
-			default: // non-blocking
+			default:
+				log.WithField("pattern", dest.Pattern.Name).Warn("fanout: Redis channel full, dropping message")
 			}
 		}
 	}

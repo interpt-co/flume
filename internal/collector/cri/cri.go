@@ -5,7 +5,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 )
+
+const maxPartialBufBytes = 1 << 20 // 1 MiB
 
 // Line represents a parsed CRI log line.
 type Line struct {
@@ -76,6 +80,10 @@ func (a *Assembler) Process(containerID string, ts time.Time, stream string, par
 		if !ok {
 			buf = &strings.Builder{}
 			a.buffers[containerID] = buf
+		}
+		if buf.Len()+len(content) > maxPartialBufBytes {
+			log.WithField("container", containerID).Warn("cri: partial buffer overflow, discarding")
+			buf.Reset()
 		}
 		buf.WriteString(content)
 		return nil

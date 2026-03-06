@@ -98,7 +98,9 @@ export const useLogsStore = defineStore('logs', () => {
   function trimToWindow() {
     if (messages.value.length > WINDOW_SIZE) {
       const excess = messages.value.length - WINDOW_SIZE
+      const removed = messages.value.slice(0, excess)
       messages.value = messages.value.slice(excess)
+      for (const m of removed) seenIds.delete(m.id)
       oldestLoadedIndex.value += excess
     }
   }

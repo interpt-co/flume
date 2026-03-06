@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"time"
 
+	log "github.com/sirupsen/logrus"
+
 	"github.com/interpt-co/flume/internal/models"
 	"github.com/interpt-co/flume/internal/query"
 )
@@ -63,10 +65,12 @@ func (h *HistoryHandler) HandleHistory(w http.ResponseWriter, r *http.Request) {
 	if patternName != "" && h.manager != nil && h.manager.redisReader != nil {
 		msgs := h.unifiedHistory(r.Context(), patternName, before, count, map[string]string(filter))
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(historyResponse{
+		if err := json.NewEncoder(w).Encode(historyResponse{
 			Messages: msgs,
 			HasMore:  len(msgs) == count,
-		})
+		}); err != nil {
+			log.WithError(err).Warn("history: failed to encode response")
+		}
 		return
 	}
 
@@ -78,15 +82,19 @@ func (h *HistoryHandler) HandleHistory(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(historyResponse{
+		if err := json.NewEncoder(w).Encode(historyResponse{
 			Messages: msgs,
 			HasMore:  len(msgs) == count,
-		})
+		}); err != nil {
+			log.WithError(err).Warn("history: failed to encode response")
+		}
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(historyResponse{})
+	if err := json.NewEncoder(w).Encode(historyResponse{}); err != nil {
+		log.WithError(err).Warn("history: failed to encode response")
+	}
 }
 
 // unifiedHistory reads from Redis first, then S3 for older data.
@@ -155,7 +163,9 @@ func (m *ClientManager) HandleLabels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		log.WithError(err).Warn("labels: failed to encode response")
+	}
 }
 
 func parseBefore(r *http.Request) time.Time {

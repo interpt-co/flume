@@ -21,6 +21,7 @@ const connectionStore = useConnectionStore()
 const container = ref<HTMLElement | null>(null)
 const showFollowButton = ref(false)
 let trimTimer: ReturnType<typeof setTimeout> | null = null
+let isTrimming = false
 
 function onScroll() {
   if (!container.value) return
@@ -89,8 +90,10 @@ watch(
   () => logsStore.messages.length,
   async () => {
     if (settings.autoFollow) {
-      if (logsStore.messages.length > 600) {
+      if (logsStore.messages.length > 600 && !isTrimming) {
+        isTrimming = true
         logsStore.trimToWindow()
+        isTrimming = false
       }
       await nextTick()
       scrollToBottom()

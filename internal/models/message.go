@@ -35,14 +35,14 @@ type Origin struct {
 
 // LogMessage is the item type that flows through the processing pipeline.
 type LogMessage struct {
+	Timestamp   time.Time         `json:"ts"`
+	JsonContent json.RawMessage   `json:"json_content,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"`
 	ID          string            `json:"id"`
 	Content     string            `json:"content"`
-	JsonContent json.RawMessage   `json:"json_content,omitempty"`
-	IsJson      bool              `json:"is_json"`
-	Timestamp   time.Time         `json:"ts"`
+	Level       string            `json:"level,omitempty"`
 	Source      SourceType        `json:"source"`
 	Origin      Origin            `json:"origin"`
-	Labels      map[string]string `json:"labels,omitempty"`
-	Level       string            `json:"level,omitempty"`
 	Kube        *KubeMeta         `json:"kube,omitempty"`
+	IsJson      bool              `json:"is_json,omitempty"`
 }

@@ -332,7 +332,7 @@ func (s *S3Storage) listPartitions(ctx context.Context) ([]string, error) {
 			}
 		}
 
-		if !aws.ToBool(out.IsTruncated) {
+		if !aws.ToBool(out.IsTruncated) || out.NextContinuationToken == nil {
 			break
 		}
 		continuationToken = out.NextContinuationToken
@@ -397,7 +397,7 @@ func (s *S3Storage) listKeys(ctx context.Context, prefix string) ([]string, erro
 		for _, obj := range out.Contents {
 			keys = append(keys, aws.ToString(obj.Key))
 		}
-		if !aws.ToBool(out.IsTruncated) {
+		if !aws.ToBool(out.IsTruncated) || out.NextContinuationToken == nil {
 			break
 		}
 		continuationToken = out.NextContinuationToken
@@ -587,7 +587,7 @@ func (s *S3Storage) DiscoverNodes(ctx context.Context) ([]string, error) {
 			}
 		}
 
-		if !aws.ToBool(out.IsTruncated) {
+		if !aws.ToBool(out.IsTruncated) || out.NextContinuationToken == nil {
 			break
 		}
 		continuationToken = out.NextContinuationToken

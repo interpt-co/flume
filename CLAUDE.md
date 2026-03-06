@@ -34,7 +34,7 @@ make build-backend    # Build backend only
 make build-collector  # Build collector binary (CGO_ENABLED=0)
 make build-dispatcher # Build dispatcher binary (CGO_ENABLED=0)
 make dev-dispatcher   # Run dispatcher in dev mode
-make dev-collector    # Run collector in dev mode
+make dev-collector    # Run collector in dev mode (requires test-config.yaml)
 make test             # Run tests
 make clean            # Remove build artifacts
 make lint             # Run linters

@@ -35,6 +35,7 @@ const emit = defineEmits<{
 
 // logs state
 const messages = ref<LogMessage[]>([])
+const seenIds = new Set<string>()
 const filter = ref('')
 const filterMode = ref<'text' | 'regex'>('text')
 const isLoadingHistory = ref(false)
@@ -241,12 +242,11 @@ function toggleFollowing() {
 const MAX_MESSAGES = 5000
 
 function addMessages(msgs: LogMessage[]) {
-  const tail = messages.value.slice(-200)
-  const existingIds = new Set(tail.map((m) => m.id))
-  const newMsgs = msgs.filter((m) => !existingIds.has(m.id))
+  const newMsgs = msgs.filter((m) => !seenIds.has(m.id))
   if (newMsgs.length === 0) return
 
   for (const m of newMsgs) {
+    seenIds.add(m.id)
     emit('flume:message', m)
   }
 
@@ -254,12 +254,15 @@ function addMessages(msgs: LogMessage[]) {
 
   if (messages.value.length > MAX_MESSAGES) {
     const excess = messages.value.length - MAX_MESSAGES
+    const removed = messages.value.slice(0, excess)
     messages.value = messages.value.slice(excess)
+    for (const m of removed) seenIds.delete(m.id)
   }
 }
 
 function clearMessages() {
   messages.value = []
+  seenIds.clear()
 }
 
 // ---- Scroll / auto-follow ------------------------------------------------
@@ -300,7 +303,9 @@ function resumeAutoFollow() {
   cancelTrimTimer()
   trimTimer = setTimeout(() => {
     if (localAutoFollow.value && messages.value.length > 500) {
+      const removed = messages.value.slice(0, messages.value.length - 500)
       messages.value = messages.value.slice(messages.value.length - 500)
+      for (const m of removed) seenIds.delete(m.id)
     }
     trimTimer = null
   }, 10000)
@@ -318,7 +323,9 @@ watch(
   async () => {
     if (localAutoFollow.value) {
       if (messages.value.length > 600) {
+        const removed = messages.value.slice(0, messages.value.length - 500)
         messages.value = messages.value.slice(messages.value.length - 500)
+        for (const m of removed) seenIds.delete(m.id)
       }
       await nextTick()
       scrollToBottom()

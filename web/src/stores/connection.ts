@@ -49,7 +49,7 @@ export const useConnectionStore = defineStore('connection', () => {
     following.value = val
   }
 
-  function registerControls(pause: () => void, resume: () => void) {
+  function registerControls(pause: (() => void) | null, resume: (() => void) | null) {
     pauseFn.value = pause
     resumeFn.value = resume
   }
@@ -66,6 +66,7 @@ export const useConnectionStore = defineStore('connection', () => {
     const logsStore = useLogsStore()
     try {
       const statusRes = await fetch(buildURL('/api/status'))
+      if (!statusRes.ok) return
       const statusData = await statusRes.json()
       const bufUsed = statusData.buffer_used as number
       if (bufUsed === 0) return
@@ -74,6 +75,7 @@ export const useConnectionStore = defineStore('connection', () => {
       const start = bufUsed - count
 
       const res = await fetch(buildURL('/api/client/load', `start=${start}&count=${count}`))
+      if (!res.ok) return
       const data = await res.json() as { messages: LogMessage[]; total: number }
       logsStore.setInitialMessages(data.messages, start)
     } catch {
@@ -94,6 +96,7 @@ export const useConnectionStore = defineStore('connection', () => {
         if (count <= 0) return
 
         const res = await fetch(buildURL('/api/client/load', `start=${start}&count=${count}`))
+        if (!res.ok) return
         const data = await res.json() as { messages: LogMessage[]; total: number }
         logsStore.prependHistory(data.messages, start)
       } else if (logsStore.s3HasMore) {
@@ -102,6 +105,7 @@ export const useConnectionStore = defineStore('connection', () => {
         if (!before) return
 
         const res = await fetch(buildURL('/api/history', `before=${encodeURIComponent(before)}&count=${WINDOW_SIZE}`))
+        if (!res.ok) return
         const data = await res.json() as { messages: LogMessage[]; has_more: boolean }
 
         if (!data.has_more) {

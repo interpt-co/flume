@@ -87,7 +87,7 @@ function toggleLabel(key: string, value: string) {
 
 .label-filter__key {
   font-size: 11px;
-  color: var(--flume-fg-muted);
+  color: var(--flume-fg-secondary);
   font-weight: 600;
   user-select: none;
 }
@@ -131,7 +131,7 @@ function toggleLabel(key: string, value: string) {
   border: none;
   border-radius: 3px;
   background: transparent;
-  color: var(--flume-fg-muted);
+  color: var(--flume-fg-secondary);
   cursor: pointer;
   font-family: var(--flume-font-family);
   text-decoration: underline;

@@ -2,12 +2,13 @@ package processing
 
 import (
 	"context"
-	"encoding/json"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/valyala/fastjson"
+
 	"github.com/interpt-co/flume/internal/models"
 )
 
@@ -58,15 +59,12 @@ var bareRe = regexp.MustCompile(`(?im)(?:^|[\d\-:.TZ ]+\s)(TRACE|DEBUG|INFO|WARN
 func extractLevel(msg models.LogMessage) string {
 	// 1. JSON: look for "level" or "severity" field.
 	if msg.IsJson && len(msg.JsonContent) > 0 {
-		var obj map[string]json.RawMessage
-		if json.Unmarshal(msg.JsonContent, &obj) == nil {
+		v, err := fastjson.ParseBytes(msg.JsonContent)
+		if err == nil {
 			for _, key := range []string{"level", "severity"} {
-				if raw, ok := obj[key]; ok {
-					var s string
-					if json.Unmarshal(raw, &s) == nil {
-						if lvl := normalizeLevel(s); lvl != "" {
-							return lvl
-						}
+				if s := v.GetStringBytes(key); len(s) > 0 {
+					if lvl := normalizeLevel(string(s)); lvl != "" {
+						return lvl
 					}
 				}
 			}

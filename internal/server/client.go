@@ -79,6 +79,8 @@ type Client struct {
 	pattern     string
 	labelFilter map[string]string
 	preFilter   map[string]string
+	connCtx     context.Context
+	connCancel  context.CancelFunc
 	redisCancel context.CancelFunc
 	mu          sync.Mutex
 	writeMu     sync.Mutex
@@ -86,12 +88,15 @@ type Client struct {
 }
 
 func newClient(id string, conn *websocket.Conn, manager *ClientManager) *Client {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Client{
-		id:      id,
-		conn:    conn,
-		manager: manager,
-		send:    make(chan models.LogMessage, sendBufferSize),
-		status:  StatusFollowing,
+		id:         id,
+		conn:       conn,
+		manager:    manager,
+		send:       make(chan models.LogMessage, sendBufferSize),
+		status:     StatusFollowing,
+		connCtx:    ctx,
+		connCancel: cancel,
 	}
 }
 
@@ -105,7 +110,7 @@ func (c *Client) subscribeToPatternRedis(patternName string) {
 		c.redisCancel()
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(c.connCtx)
 	c.redisCancel = cancel
 	c.pattern = patternName
 
@@ -142,6 +147,8 @@ func (c *Client) subscribeToPatternRedis(patternName string) {
 
 					select {
 					case c.send <- msg:
+					case <-ctx.Done():
+						return
 					default:
 					}
 				}
@@ -225,7 +232,7 @@ func (c *Client) readPump() {
 			filter := c.labelFilter
 			c.mu.Unlock()
 			if pn != "" {
-				messages, err := c.manager.redisReader.GetMessages(context.Background(), pn, data.Start, data.Count)
+				messages, err := c.manager.redisReader.GetMessages(c.connCtx, pn, data.Start, data.Count)
 				if err != nil {
 					log.WithError(err).Warn("load_range: redis read error")
 					continue
@@ -279,8 +286,8 @@ func (c *Client) readPump() {
 func (c *Client) handleSetPatternRedis(patternName string) {
 	c.subscribeToPatternRedis(patternName)
 
-	stats, _ := c.manager.redisReader.GetStats(context.Background(), patternName)
-	count, _ := c.manager.redisReader.GetMessageCount(context.Background(), patternName)
+	stats, _ := c.manager.redisReader.GetStats(c.connCtx, patternName)
+	count, _ := c.manager.redisReader.GetMessageCount(c.connCtx, patternName)
 
 	c.writeJSON(wsMessage{
 		Type: "pattern_changed",

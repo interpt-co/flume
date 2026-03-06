@@ -44,6 +44,12 @@ func redisBatcher(ctx context.Context, pattern string, ch <-chan models.LogMessa
 			batch = append(batch, msg)
 			if len(batch) >= redisBatchSize {
 				flush()
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
 				timer.Reset(redisBatchTimeout)
 			}
 		case <-timer.C:

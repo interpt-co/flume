@@ -70,9 +70,13 @@ func ReadManifest(ctx context.Context, client S3Client, bucket, key string) (*Ho
 	}
 	defer out.Body.Close()
 
-	data, err := io.ReadAll(out.Body)
+	const maxManifestSize = 1 << 20 // 1 MB
+	data, err := io.ReadAll(io.LimitReader(out.Body, int64(maxManifestSize)+1))
 	if err != nil {
 		return nil, fmt.Errorf("reading manifest %s: %w", key, err)
+	}
+	if len(data) > maxManifestSize {
+		return nil, fmt.Errorf("manifest %s exceeds %d byte size limit", key, maxManifestSize)
 	}
 
 	var m HourManifest

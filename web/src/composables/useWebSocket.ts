@@ -21,7 +21,9 @@ export function useWebSocket(url: string | (() => string)) {
 
   function connect() {
     if (ws) {
+      ws.onclose = null
       ws.close()
+      ws = null
     }
 
     connectionStore.status = 'connecting'

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -12,7 +13,8 @@ import (
 type AuthConfig struct {
 	URL     string
 	Timeout time.Duration
-	client  *http.Client // lazily initialized, reused for connection pooling
+	client  *http.Client
+	once    sync.Once
 }
 
 type authRequest struct {
@@ -37,14 +39,13 @@ func (ac *AuthConfig) Check(r *http.Request, filters map[string]string, pattern 
 		Pattern: pattern,
 	})
 
-	timeout := ac.Timeout
-	if timeout == 0 {
-		timeout = 5 * time.Second
-	}
-
-	if ac.client == nil {
+	ac.once.Do(func() {
+		timeout := ac.Timeout
+		if timeout == 0 {
+			timeout = 5 * time.Second
+		}
 		ac.client = &http.Client{Timeout: timeout}
-	}
+	})
 
 	req, err := http.NewRequestWithContext(r.Context(), "POST", ac.URL, bytes.NewReader(body))
 	if err != nil {

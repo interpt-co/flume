@@ -37,7 +37,9 @@ func (m *ClientManager) HandleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	json.NewEncoder(w).Encode(info)
+	if err := json.NewEncoder(w).Encode(info); err != nil {
+		log.WithError(err).Warn("HandleStatus: encode error")
+	}
 }
 
 // HandleLoadRange returns messages from the Redis sorted set.
@@ -46,6 +48,9 @@ func (m *ClientManager) HandleLoadRange(w http.ResponseWriter, r *http.Request) 
 	startStr := r.URL.Query().Get("start")
 	countStr := r.URL.Query().Get("count")
 	start, _ := strconv.Atoi(startStr)
+	if start < 0 {
+		start = 0
+	}
 	count, _ := strconv.Atoi(countStr)
 	if count <= 0 {
 		count = 100
@@ -88,10 +93,12 @@ func (m *ClientManager) HandleLoadRange(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"messages": msgs,
 		"total":    m.MessageCount(),
-	})
+	}); err != nil {
+		log.WithError(err).Warn("HandleLoadRange: encode error")
+	}
 }
 
 // PatternInfo holds per-pattern stats for the /api/patterns endpoint.
@@ -138,5 +145,7 @@ func (m *ClientManager) HandlePatterns(w http.ResponseWriter, r *http.Request) {
 			SubscriberCount: subCounts[name],
 		})
 	}
-	json.NewEncoder(w).Encode(result)
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		log.WithError(err).Warn("HandlePatterns: encode error")
+	}
 }

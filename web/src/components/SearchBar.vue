@@ -22,6 +22,12 @@ watch(searchText, (val) => {
   }, 200)
 })
 
+watch(() => logsStore.filter, (val) => {
+  if (val !== searchText.value) {
+    searchText.value = val
+  }
+})
+
 function toggleRegex() {
   logsStore.setFilterMode(regexMode.value ? 'text' : 'regex')
 }

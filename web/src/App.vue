@@ -12,11 +12,13 @@ import PatternSelector from './components/PatternSelector.vue'
 import { useWebSocket } from './composables/useWebSocket'
 import { useTheme } from './composables/useTheme'
 import { useLabelsStore } from './stores/labels'
+import { usePatternsStore } from './stores/patterns'
 import { usePrefilterStore } from './stores/prefilter'
 import type { LogMessage } from './types'
 
 useTheme()
 const labelsStore = useLabelsStore()
+const patternsStore = usePatternsStore()
 const prefilterStore = usePrefilterStore()
 prefilterStore.loadFromURL()
 
@@ -42,10 +44,12 @@ function closeDetail() {
 onMounted(() => {
   connect()
   labelsStore.startPolling()
+  patternsStore.startPolling()
 })
 
 onUnmounted(() => {
   labelsStore.stopPolling()
+  patternsStore.stopPolling()
 })
 </script>
 

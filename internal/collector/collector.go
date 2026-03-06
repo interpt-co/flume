@@ -67,7 +67,7 @@ func (c *Collector) Run(ctx context.Context) error {
 	go func() {
 		if err := podWatcher.Start(ctx, c.nodeName); err != nil {
 			if len(c.cfg.StaticLabels) > 0 {
-				log.Debug("collector: pod watcher unavailable, using static labels")
+				log.Info("collector: pod watcher unavailable, using static labels")
 			} else {
 				log.WithError(err).Warn("collector: pod watcher failed (labels will be empty)")
 			}
@@ -85,6 +85,7 @@ func (c *Collector) Run(ctx context.Context) error {
 		if err := redisClient.Ping(ctx); err != nil {
 			return fmt.Errorf("redis ping: %w", err)
 		}
+		defer redisClient.Close()
 		redisWriter = flumeredis.NewWriter(redisClient)
 		log.WithField("addr", c.cfg.Redis.Addr).Info("collector: connected to Redis")
 	}

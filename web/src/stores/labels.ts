@@ -40,7 +40,7 @@ export const useLabelsStore = defineStore('labels', () => {
     }
   }
 
-  function registerSendFilter(fn: (labels: Record<string, string>) => void) {
+  function registerSendFilter(fn: ((labels: Record<string, string>) => void) | null) {
     sendFilterFn = fn
   }
 

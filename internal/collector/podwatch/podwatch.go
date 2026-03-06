@@ -100,7 +100,13 @@ func (w *Watcher) StartWithClient(ctx context.Context, clientset kubernetes.Inte
 
 	log.WithField("node", nodeName).Info("podwatch: starting informer")
 	factory.Start(ctx.Done())
-	factory.WaitForCacheSync(ctx.Done())
+	synced := factory.WaitForCacheSync(ctx.Done())
+	for _, ok := range synced {
+		if !ok {
+			log.Warn("podwatch: informer cache failed to sync")
+			break
+		}
+	}
 
 	<-ctx.Done()
 	return nil

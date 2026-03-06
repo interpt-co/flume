@@ -55,7 +55,15 @@ func (m *ClientManager) SetAuthConfig(ac *AuthConfig) {
 }
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // non-browser clients
+		}
+		// Allow same-origin requests.
+		host := r.Host
+		return origin == "http://"+host || origin == "https://"+host
+	},
 }
 
 // HandleWS upgrades an HTTP connection to a WebSocket and registers the client.
@@ -107,6 +115,9 @@ func (m *ClientManager) HandleWS(w http.ResponseWriter, r *http.Request) {
 	joined.Patterns = patterns
 	if c.pattern != "" {
 		joined.DefaultPattern = c.pattern
+		if stats, err := m.redisReader.GetStats(r.Context(), c.pattern); err == nil {
+			joined.BufferSize = int(stats.BufferCapacity)
+		}
 	} else if len(patterns) > 0 {
 		joined.DefaultPattern = patterns[0]
 	}
@@ -125,6 +136,7 @@ func (m *ClientManager) removeClient(id string) {
 	m.mu.Lock()
 	c, ok := m.clients[id]
 	if ok {
+		c.connCancel()
 		if c.redisCancel != nil {
 			c.redisCancel()
 		}

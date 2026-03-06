@@ -126,7 +126,7 @@ func listCommonPrefixes(ctx context.Context, client S3Client, bucket, prefix str
 		for _, cp := range out.CommonPrefixes {
 			prefixes = append(prefixes, aws.ToString(cp.Prefix))
 		}
-		if !aws.ToBool(out.IsTruncated) {
+		if !aws.ToBool(out.IsTruncated) || out.NextContinuationToken == nil {
 			break
 		}
 		continuationToken = out.NextContinuationToken
@@ -225,7 +225,7 @@ func deleteAllUnder(ctx context.Context, client S3Client, bucket, prefix string)
 			return fmt.Errorf("DeleteObjects: %w", err)
 		}
 
-		if !aws.ToBool(out.IsTruncated) {
+		if !aws.ToBool(out.IsTruncated) || out.NextContinuationToken == nil {
 			break
 		}
 		continuationToken = out.NextContinuationToken

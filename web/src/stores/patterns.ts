@@ -24,7 +24,7 @@ export const usePatternsStore = defineStore('patterns', () => {
     selectPatternFn?.(name)
   }
 
-  function registerSelectPattern(fn: (name: string) => void) {
+  function registerSelectPattern(fn: ((name: string) => void) | null) {
     selectPatternFn = fn
   }
 
