@@ -73,6 +73,17 @@ func (h *HistoryHandler) HandleHistory(w http.ResponseWriter, r *http.Request) {
 
 	count := parseCount(r)
 	filter := query.ParseLabels(r.URL.Query().Get("labels"))
+	preFilter := query.ParseLabels(r.URL.Query().Get("filter"))
+	// Merge pre-filter into filter (pre-filter keys take precedence).
+	if len(preFilter) > 0 {
+		if filter == nil {
+			filter = preFilter
+		} else {
+			for k, v := range preFilter {
+				filter[k] = v
+			}
+		}
+	}
 	patternName := r.URL.Query().Get("pattern")
 
 	// Aggregator mode: unified buffer → S3 history.

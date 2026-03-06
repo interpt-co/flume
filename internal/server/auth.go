@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"time"
 )
@@ -68,7 +69,7 @@ func (ac *AuthConfig) Check(r *http.Request, filters map[string]string, pattern 
 	}
 
 	var result authResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&result); err != nil {
 		return false, "invalid auth response"
 	}
 

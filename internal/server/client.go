@@ -90,7 +90,7 @@ type Client struct {
 	pattern     string            // current pattern subscription (aggregator mode)
 	labelFilter map[string]string // nil = match all (user-changeable)
 	preFilter   map[string]string // nil = no pre-filter (immutable, set on connect)
-	mu          sync.Mutex        // guards status, pattern, and labelFilter
+	mu          sync.Mutex        // guards status, pattern, labelFilter, and preFilter reads
 	writeMu     sync.Mutex        // guards WebSocket writes
 }
 
@@ -210,6 +210,23 @@ func (c *Client) readPump() {
 			ring := c.currentRing()
 			if ring != nil {
 				messages := ring.GetRange(data.Start, data.Count)
+				c.mu.Lock()
+				pre := c.preFilter
+				filter := c.labelFilter
+				c.mu.Unlock()
+				if len(pre) > 0 || len(filter) > 0 {
+					filtered := make([]models.LogMessage, 0, len(messages))
+					for _, m := range messages {
+						if len(pre) > 0 && !query.LabelMatcher(pre).Matches(m) {
+							continue
+						}
+						if len(filter) > 0 && !query.LabelMatcher(filter).Matches(m) {
+							continue
+						}
+						filtered = append(filtered, m)
+					}
+					messages = filtered
+				}
 				c.writeLogBulk(messages)
 			}
 
@@ -219,6 +236,10 @@ func (c *Client) readPump() {
 				continue
 			}
 			c.mu.Lock()
+			// Strip pre-filtered keys to prevent conflicting state.
+			for k := range c.preFilter {
+				delete(data.Labels, k)
+			}
 			if len(data.Labels) == 0 {
 				c.labelFilter = nil
 			} else {

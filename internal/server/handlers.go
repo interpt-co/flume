@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+
+	"github.com/interpt-co/flume/internal/models"
+	"github.com/interpt-co/flume/internal/query"
 )
 
 // HandleStatus writes the current server status as JSON.
@@ -64,10 +67,25 @@ func (m *ClientManager) HandleLoadRange(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	var messages interface{}
+	var msgs []models.LogMessage
 	if ring != nil {
-		messages = ring.GetRange(start, count)
-	} else {
+		msgs = ring.GetRange(start, count)
+	}
+
+	// Apply pre-filter if provided.
+	preFilter := query.ParseLabels(r.URL.Query().Get("filter"))
+	if len(preFilter) > 0 {
+		filtered := make([]models.LogMessage, 0, len(msgs))
+		for _, m := range msgs {
+			if preFilter.Matches(m) {
+				filtered = append(filtered, m)
+			}
+		}
+		msgs = filtered
+	}
+
+	var messages interface{} = msgs
+	if messages == nil {
 		messages = []struct{}{}
 	}
 
