@@ -34,25 +34,10 @@ func WatchDir(ctx context.Context, dir string) (<-chan FileEvent, error) {
 		return nil, err
 	}
 
-	ch := make(chan FileEvent, 64)
-
-	// Scan existing files.
-	entries, err := os.ReadDir(dir)
-	if err != nil {
+	// Verify directory is readable before starting.
+	if _, err := os.ReadDir(dir); err != nil {
 		watcher.Close()
 		return nil, err
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".log") {
-			continue
-		}
-		path := filepath.Join(dir, entry.Name())
-		ref, err := ParseFilename(path)
-		if err != nil {
-			log.WithError(err).WithField("path", path).Debug("discovery: skipping file")
-			continue
-		}
-		ch <- FileEvent{Type: FileAdded, Path: path, Ref: ref}
 	}
 
 	if err := watcher.Add(dir); err != nil {
@@ -60,9 +45,34 @@ func WatchDir(ctx context.Context, dir string) (<-chan FileEvent, error) {
 		return nil, err
 	}
 
+	ch := make(chan FileEvent, 256)
+
 	go func() {
 		defer watcher.Close()
 		defer close(ch)
+
+		// Initial scan inside goroutine to avoid blocking when >chan capacity files exist.
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			log.WithError(err).Warn("discovery: initial scan failed")
+			return
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".log") {
+				continue
+			}
+			path := filepath.Join(dir, entry.Name())
+			ref, err := ParseFilename(path)
+			if err != nil {
+				log.WithError(err).WithField("path", path).Debug("discovery: skipping file")
+				continue
+			}
+			select {
+			case ch <- FileEvent{Type: FileAdded, Path: path, Ref: ref}:
+			case <-ctx.Done():
+				return
+			}
+		}
 
 		for {
 			select {
@@ -82,7 +92,7 @@ func WatchDir(ctx context.Context, dir string) (<-chan FileEvent, error) {
 					}
 					ch <- FileEvent{Type: FileAdded, Path: event.Name, Ref: ref}
 				}
-				if event.Op&fsnotify.Remove != 0 {
+				if event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
 					ref, err := ParseFilename(event.Name)
 					if err != nil {
 						continue

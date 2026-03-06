@@ -119,7 +119,9 @@ func (c *Client) stream(ctx context.Context, ch <-chan LogEntry) error {
 		select {
 		case <-ctx.Done():
 			if len(batch) > 0 {
-				c.sendBatch(stream, batch)
+				if err := c.sendBatch(stream, batch); err != nil {
+					log.WithError(err).Warn("gRPC client: failed to flush batch on shutdown")
+				}
 			}
 			stream.CloseSend()
 			return ctx.Err()
@@ -127,7 +129,9 @@ func (c *Client) stream(ctx context.Context, ch <-chan LogEntry) error {
 		case entry, ok := <-ch:
 			if !ok {
 				if len(batch) > 0 {
-					c.sendBatch(stream, batch)
+					if err := c.sendBatch(stream, batch); err != nil {
+						log.WithError(err).Warn("gRPC client: failed to flush batch on channel close")
+					}
 				}
 				stream.CloseSend()
 				return nil

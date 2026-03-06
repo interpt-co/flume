@@ -34,23 +34,6 @@ type HistoryHandler struct {
 	s3Prefix string           // base S3 prefix for cross-node reads
 }
 
-// HistoryOption configures the HistoryHandler.
-type HistoryOption func(*HistoryHandler)
-
-// WithCrossNodeStorage enables cross-node S3 reads for the aggregator.
-func WithCrossNodeStorage(store CrossNodeStorage, prefix string) HistoryOption {
-	return func(h *HistoryHandler) {
-		h.xnStore = store
-		h.s3Prefix = prefix
-	}
-}
-
-// WithManager attaches a ClientManager for buffer-first history reads.
-func WithManager(m *ClientManager) HistoryOption {
-	return func(h *HistoryHandler) {
-		h.manager = m
-	}
-}
 
 // historyResponse is the JSON envelope returned by /api/history.
 type historyResponse struct {

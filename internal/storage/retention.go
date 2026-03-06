@@ -110,17 +110,26 @@ func discoverHourPrefixes(ctx context.Context, client S3Client, bucket, prefix s
 
 // listCommonPrefixes returns the common prefixes (subdirectories) under a prefix.
 func listCommonPrefixes(ctx context.Context, client S3Client, bucket, prefix string) ([]string, error) {
-	out, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket:    aws.String(bucket),
-		Prefix:    aws.String(prefix),
-		Delimiter: aws.String("/"),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("listing prefixes under %s: %w", prefix, err)
-	}
 	var prefixes []string
-	for _, cp := range out.CommonPrefixes {
-		prefixes = append(prefixes, aws.ToString(cp.Prefix))
+	var continuationToken *string
+
+	for {
+		out, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(bucket),
+			Prefix:            aws.String(prefix),
+			Delimiter:         aws.String("/"),
+			ContinuationToken: continuationToken,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("listing prefixes under %s: %w", prefix, err)
+		}
+		for _, cp := range out.CommonPrefixes {
+			prefixes = append(prefixes, aws.ToString(cp.Prefix))
+		}
+		if !aws.ToBool(out.IsTruncated) {
+			break
+		}
+		continuationToken = out.NextContinuationToken
 	}
 	return prefixes, nil
 }

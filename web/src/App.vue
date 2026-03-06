@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import LogViewer from './components/LogViewer.vue'
 import LogDetail from './components/LogDetail.vue'
 import SearchBar from './components/SearchBar.vue'
@@ -21,9 +21,11 @@ const prefilterStore = usePrefilterStore()
 prefilterStore.loadFromURL()
 
 const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-const filterQS = prefilterStore.queryString
-const wsUrl = `${wsProtocol}//${window.location.host}/ws${filterQS ? '?' + filterQS : ''}`
-const { connect } = useWebSocket(wsUrl)
+const wsUrlFactory = () => {
+  const qs = prefilterStore.queryString
+  return `${wsProtocol}//${window.location.host}/ws${qs ? '?' + qs : ''}`
+}
+const { connect } = useWebSocket(wsUrlFactory)
 
 const selectedMessage = ref<LogMessage | null>(null)
 const detailVisible = ref(false)
@@ -40,6 +42,10 @@ function closeDetail() {
 onMounted(() => {
   connect()
   labelsStore.startPolling()
+})
+
+onUnmounted(() => {
+  labelsStore.stopPolling()
 })
 </script>
 

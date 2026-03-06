@@ -84,14 +84,13 @@ func (m *ClientManager) HandleLoadRange(w http.ResponseWriter, r *http.Request) 
 		msgs = filtered
 	}
 
-	var messages interface{} = msgs
-	if messages == nil {
-		messages = []struct{}{}
+	if msgs == nil {
+		msgs = []models.LogMessage{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"messages": messages,
+		"messages": msgs,
 		"total":    m.MessageCount(),
 	})
 }

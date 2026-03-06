@@ -41,6 +41,12 @@ spec:
             - "{{ .Values.s3.endpoint }}"
             {{- end }}
             {{- end }}
+            {{- if .Values.aggregator.authUrl }}
+            - --auth-url
+            - "{{ .Values.aggregator.authUrl }}"
+            - --auth-timeout
+            - "{{ .Values.aggregator.authTimeout }}"
+            {{- end }}
             - --verbose
           ports:
             - name: http

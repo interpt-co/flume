@@ -1,5 +1,5 @@
 image:
-  repository: ghcr.io/interpt-co/flume
+  repository: interpt/flume
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -21,6 +21,8 @@ aggregator:
   port: 8080
   grpcPort: 9090
   maxMessages: 50000
+  authUrl: ""
+  authTimeout: "5s"
   resources:
     requests:
       cpu: 100m

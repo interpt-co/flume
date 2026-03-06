@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -86,12 +87,14 @@ type Client struct {
 	conn        *websocket.Conn
 	manager     *ClientManager
 	send        chan models.LogMessage
+	closed      atomic.Bool        // true after send channel is closed
 	status      string
 	pattern     string            // current pattern subscription (aggregator mode)
 	labelFilter map[string]string // nil = match all (user-changeable)
 	preFilter   map[string]string // nil = no pre-filter (immutable, set on connect)
 	mu          sync.Mutex        // guards status, pattern, labelFilter, and preFilter reads
 	writeMu     sync.Mutex        // guards WebSocket writes
+	closeOnce   sync.Once         // ensures conn.Close is called exactly once
 }
 
 func newClient(id string, conn *websocket.Conn, manager *ClientManager) *Client {
@@ -140,6 +143,10 @@ func (c *Client) subscribeToPattern(patternName string) {
 // Send enqueues a message for delivery. Non-blocking: drops the message
 // if the client's send buffer is full. Applies label filter if set.
 func (c *Client) Send(msg models.LogMessage) {
+	if c.closed.Load() {
+		return
+	}
+
 	c.mu.Lock()
 	st := c.status
 	filter := c.labelFilter
@@ -170,7 +177,7 @@ func (c *Client) Send(msg models.LogMessage) {
 func (c *Client) readPump() {
 	defer func() {
 		c.manager.removeClient(c.id)
-		c.conn.Close()
+		c.closeOnce.Do(func() { c.conn.Close() })
 	}()
 
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -346,7 +353,7 @@ func (c *Client) writePump() {
 	defer func() {
 		ticker.Stop()
 		pingTicker.Stop()
-		c.conn.Close()
+		c.closeOnce.Do(func() { c.conn.Close() })
 	}()
 
 	var batch []models.LogMessage

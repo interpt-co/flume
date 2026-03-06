@@ -32,7 +32,8 @@ export const usePrefilterStore = defineStore('prefilter', () => {
   }
 
   function setFromServer(preFilters: Record<string, string>) {
-    if (preFilters && Object.keys(preFilters).length > 0) {
+    // Only apply server-sent filters if no URL-based filters were loaded.
+    if (preFilters && Object.keys(preFilters).length > 0 && Object.keys(filters.value).length === 0) {
       filters.value = preFilters
     }
   }

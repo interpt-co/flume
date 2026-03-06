@@ -12,6 +12,7 @@ import (
 type AuthConfig struct {
 	URL     string
 	Timeout time.Duration
+	client  *http.Client // lazily initialized, reused for connection pooling
 }
 
 type authRequest struct {
@@ -41,21 +42,29 @@ func (ac *AuthConfig) Check(r *http.Request, filters map[string]string, pattern 
 		timeout = 5 * time.Second
 	}
 
-	client := &http.Client{Timeout: timeout}
-	req, err := http.NewRequest("POST", ac.URL, bytes.NewReader(body))
+	if ac.client == nil {
+		ac.client = &http.Client{Timeout: timeout}
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), "POST", ac.URL, bytes.NewReader(body))
 	if err != nil {
 		return false, "auth request failed"
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	// Forward auth credentials to the callback.
+	// Browsers cannot set custom headers on WebSocket upgrades, so also
+	// accept a "token" query param and map it to an Authorization header.
 	if v := r.Header.Get("Authorization"); v != "" {
 		req.Header.Set("Authorization", v)
+	} else if v := r.URL.Query().Get("token"); v != "" {
+		req.Header.Set("Authorization", "Bearer "+v)
 	}
 	if v := r.Header.Get("Cookie"); v != "" {
 		req.Header.Set("Cookie", v)
 	}
 
-	resp, err := client.Do(req)
+	resp, err := ac.client.Do(req)
 	if err != nil {
 		return false, "auth service unreachable"
 	}

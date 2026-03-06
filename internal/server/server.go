@@ -23,13 +23,6 @@ type serverOptions struct {
 	s3Prefix        string
 }
 
-// WithStorage attaches a Storage backend for the /api/history endpoint.
-func WithStorage(s Storage) ServerOption {
-	return func(o *serverOptions) {
-		o.storage = s
-	}
-}
-
 // WithCrossNodeStorageOption attaches cross-node storage for aggregator history.
 func WithCrossNodeStorageOption(store CrossNodeStorage, prefix string) ServerOption {
 	return func(o *serverOptions) {

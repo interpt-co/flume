@@ -125,11 +125,13 @@ func getDurationFlag(cmd *cobra.Command, flag, envVar string, fallback time.Dura
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
 		}
+		fmt.Fprintf(os.Stderr, "warning: invalid duration for --%s: %q, using default %s\n", flag, v, fallback)
 	}
 	if env := os.Getenv(envVar); env != "" {
 		if d, err := time.ParseDuration(env); err == nil {
 			return d
 		}
+		fmt.Fprintf(os.Stderr, "warning: invalid duration in %s: %q, using default %s\n", envVar, env, fallback)
 	}
 	return fallback
 }

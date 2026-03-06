@@ -175,7 +175,7 @@ func (s *S3Storage) flush(ctx context.Context) error {
 		if err := s.writeChunk(ctx, msgs, key); err != nil {
 			return err
 		}
-		s.appendManifestAfterFlush(ctx, key, msgs, "")
+		s.appendManifestAfterFlush(ctx, key, msgs, "", now)
 		return nil
 	}
 
@@ -196,7 +196,7 @@ func (s *S3Storage) flush(ctx context.Context) error {
 		if err := s.writeChunk(ctx, group, key); err != nil {
 			return err
 		}
-		s.appendManifestAfterFlush(ctx, key, group, partition)
+		s.appendManifestAfterFlush(ctx, key, group, partition, now)
 	}
 	return nil
 }
@@ -309,24 +309,33 @@ func (s *S3Storage) listPartitions(ctx context.Context) ([]string, error) {
 	prefix := strings.TrimRight(s.cfg.Prefix, "/") + "/"
 	delimiter := "/"
 
-	out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket:    aws.String(s.cfg.Bucket),
-		Prefix:    aws.String(prefix),
-		Delimiter: aws.String(delimiter),
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	var partitions []string
-	for _, cp := range out.CommonPrefixes {
-		p := aws.ToString(cp.Prefix)
-		// Extract partition name: strip prefix and trailing slash.
-		p = strings.TrimPrefix(p, prefix)
-		p = strings.TrimSuffix(p, "/")
-		if p != "" {
-			partitions = append(partitions, p)
+	var continuationToken *string
+
+	for {
+		out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(s.cfg.Bucket),
+			Prefix:            aws.String(prefix),
+			Delimiter:         aws.String(delimiter),
+			ContinuationToken: continuationToken,
+		})
+		if err != nil {
+			return nil, err
 		}
+
+		for _, cp := range out.CommonPrefixes {
+			p := aws.ToString(cp.Prefix)
+			p = strings.TrimPrefix(p, prefix)
+			p = strings.TrimSuffix(p, "/")
+			if p != "" {
+				partitions = append(partitions, p)
+			}
+		}
+
+		if !aws.ToBool(out.IsTruncated) {
+			break
+		}
+		continuationToken = out.NextContinuationToken
 	}
 	return partitions, nil
 }
@@ -555,23 +564,33 @@ func (s *S3Storage) DiscoverNodes(ctx context.Context) ([]string, error) {
 	prefix := strings.TrimRight(s.cfg.Prefix, "/") + "/"
 	delimiter := "/"
 
-	out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket:    aws.String(s.cfg.Bucket),
-		Prefix:    aws.String(prefix),
-		Delimiter: aws.String(delimiter),
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	var nodes []string
-	for _, cp := range out.CommonPrefixes {
-		p := aws.ToString(cp.Prefix)
-		p = strings.TrimPrefix(p, prefix)
-		p = strings.TrimSuffix(p, "/")
-		if p != "" {
-			nodes = append(nodes, p)
+	var continuationToken *string
+
+	for {
+		out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(s.cfg.Bucket),
+			Prefix:            aws.String(prefix),
+			Delimiter:         aws.String(delimiter),
+			ContinuationToken: continuationToken,
+		})
+		if err != nil {
+			return nil, err
 		}
+
+		for _, cp := range out.CommonPrefixes {
+			p := aws.ToString(cp.Prefix)
+			p = strings.TrimPrefix(p, prefix)
+			p = strings.TrimSuffix(p, "/")
+			if p != "" {
+				nodes = append(nodes, p)
+			}
+		}
+
+		if !aws.ToBool(out.IsTruncated) {
+			break
+		}
+		continuationToken = out.NextContinuationToken
 	}
 	return nodes, nil
 }
@@ -619,5 +638,3 @@ func UnmarshalGzip(r io.Reader) ([]models.LogMessage, error) {
 	return msgs, nil
 }
 
-// Verify S3Storage implements Storage at compile time.
-var _ Storage = (*S3Storage)(nil)

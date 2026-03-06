@@ -67,17 +67,30 @@ export const useLogsStore = defineStore('logs', () => {
     return result
   })
 
+  const seenIds = new Set<string>()
+
+  function rebuildSeenIds() {
+    seenIds.clear()
+    for (const m of messages.value) {
+      seenIds.add(m.id)
+    }
+  }
+
   function addMessages(msgs: LogMessage[]) {
-    const tail = messages.value.slice(-200)
-    const existingIds = new Set(tail.map(m => m.id))
-    const newMsgs = msgs.filter(m => !existingIds.has(m.id))
+    const newMsgs = msgs.filter(m => !seenIds.has(m.id))
     if (newMsgs.length === 0) return
 
+    for (const m of newMsgs) {
+      seenIds.add(m.id)
+    }
     messages.value.push(...newMsgs)
 
     if (messages.value.length > MAX_MESSAGES) {
       const excess = messages.value.length - MAX_MESSAGES
-      messages.value = messages.value.slice(excess)
+      const removed = messages.value.splice(0, excess)
+      for (const m of removed) {
+        seenIds.delete(m.id)
+      }
       oldestLoadedIndex.value += excess
     }
   }
@@ -100,10 +113,12 @@ export const useLogsStore = defineStore('logs', () => {
     const wsOnly = messages.value.filter(m => !historyIds.has(m.id))
     messages.value = [...msgs, ...wsOnly]
     oldestLoadedIndex.value = startIndex
+    rebuildSeenIds()
   }
 
   function clear() {
     messages.value = []
+    seenIds.clear()
     oldestLoadedIndex.value = 0
     s3HasMore.value = true
   }

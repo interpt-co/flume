@@ -59,6 +59,9 @@ func (r *Ring[T]) GetRange(start, count int) []T {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if count <= 0 {
+		return nil
+	}
 	if start < 0 {
 		start = 0
 	}
@@ -86,5 +89,7 @@ func (r *Ring[T]) Len() int {
 
 // Cap returns the maximum capacity of the buffer.
 func (r *Ring[T]) Cap() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.cap
 }

@@ -563,17 +563,6 @@ func TestS3Storage_WriteAndReadRoundTrip(t *testing.T) {
 	}
 }
 
-func TestS3Storage_InterfaceCompliance(t *testing.T) {
-	// Compile-time check is already done via var _ Storage = (*S3Storage)(nil).
-	// This test verifies the methods exist with the expected signatures.
-	mock := newMockS3Client()
-	cfg := S3Config{Bucket: "b", Prefix: "p"}
-	var s Storage = NewS3StorageWithClient(mock, cfg)
-
-	_ = s.Writer()
-	_, _ = s.ReadBefore(context.Background(), time.Now(), 10, nil)
-}
-
 func TestS3Storage_ReadBefore_WithLabelFilter(t *testing.T) {
 	mock := newMockS3Client()
 	cfg := S3Config{

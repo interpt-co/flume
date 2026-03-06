@@ -97,21 +97,16 @@ func (c *Collector) Run(ctx context.Context) error {
 				FlushCount:    c.cfg.S3.FlushCount,
 				Retention:     c.cfg.S3.Retention,
 			}
-			s3store := storage.NewS3StorageWithClient(nil, s3cfg)
-			// Only start if we have a real client (bucket configured).
-			if c.cfg.S3.Bucket != "" {
-				s3store2, err := storage.NewS3Storage(ctx, s3cfg)
-				if err != nil {
-					return fmt.Errorf("S3 storage for pattern %s: %w", pDef.Name, err)
-				}
-				go func() {
-					if err := s3store2.Start(ctx); err != nil {
-						log.WithError(err).WithField("pattern", pDef.Name).Error("S3 storage loop error")
-					}
-				}()
-				dest.S3 = s3store2.Writer()
+			s3store, err := storage.NewS3Storage(ctx, s3cfg)
+			if err != nil {
+				return fmt.Errorf("S3 storage for pattern %s: %w", pDef.Name, err)
 			}
-			_ = s3store // placeholder for non-bucket case
+			go func() {
+				if err := s3store.Start(ctx); err != nil {
+					log.WithError(err).WithField("pattern", pDef.Name).Error("S3 storage loop error")
+				}
+			}()
+			dest.S3 = s3store.Writer()
 		}
 
 		// gRPC channel per pattern.
@@ -178,8 +173,6 @@ func (c *Collector) Run(ctx context.Context) error {
 						tc.cancel()
 						delete(tailers, event.Path)
 					}
-					containerID := event.Ref.ID
-					assembler.Remove(containerID)
 				}
 			}
 		}
@@ -239,7 +232,11 @@ func tailFile(ctx context.Context, event discovery.FileEvent, podWatcher *podwat
 		return
 	}
 
-	defer t.Stop()
+	defer func() {
+		t.Stop()
+		t.Cleanup()
+	}()
+	defer assembler.Remove(ref.ID)
 
 	for {
 		select {

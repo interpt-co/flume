@@ -195,19 +195,12 @@ func manifestTimeOverlaps(meta ChunkMeta, before time.Time) bool {
 }
 
 // appendManifestAfterFlush is called after each chunk is written to update the
-// hour's manifest. Errors are logged but don't fail the flush.
-func (s *S3Storage) appendManifestAfterFlush(ctx context.Context, key string, msgs []models.LogMessage, partition string) {
+// hour's manifest. flushTime must match the time used to generate the chunk key.
+// Errors are logged but don't fail the flush.
+func (s *S3Storage) appendManifestAfterFlush(ctx context.Context, key string, msgs []models.LogMessage, partition string, flushTime time.Time) {
 	meta := BuildChunkMeta(key, msgs)
 
-	// Determine the hour from the first message's timestamp.
-	var t time.Time
-	if len(msgs) > 0 {
-		t = msgs[0].Timestamp
-	} else {
-		t = time.Now()
-	}
-
-	mKey := ManifestKey(s.cfg.Prefix, partition, t)
+	mKey := ManifestKey(s.cfg.Prefix, partition, flushTime)
 	if err := AppendChunk(ctx, s.client, s.cfg.Bucket, mKey, meta); err != nil {
 		log.WithError(err).Warn("storage: failed to update manifest")
 	}

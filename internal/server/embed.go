@@ -4,6 +4,7 @@ import (
 	"embed"
 	"io/fs"
 	"net/http"
+	"path"
 )
 
 //go:embed all:dist
@@ -21,15 +22,15 @@ func FrontendHandler() http.Handler {
 	fileServer := http.FileServer(http.FS(distFS))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Try to stat the requested path inside the embedded FS.
-		path := r.URL.Path
-		if path == "/" {
-			path = "/index.html"
-		}
-
-		if _, err := fs.Stat(distFS, path[1:]); err != nil {
-			// File not found – serve index.html for SPA routing.
-			r.URL.Path = "/"
+		// Clean the path to prevent traversal attacks.
+		cleaned := path.Clean(r.URL.Path)
+		if cleaned != "/" {
+			if _, err := fs.Stat(distFS, cleaned[1:]); err != nil {
+				// File not found – serve index.html for SPA routing.
+				r.URL.Path = "/"
+			} else {
+				r.URL.Path = cleaned
+			}
 		}
 
 		fileServer.ServeHTTP(w, r)

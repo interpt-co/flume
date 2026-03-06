@@ -140,12 +140,18 @@ func (m *ClientManager) removeClient(id string) {
 	m.mu.Lock()
 	c, ok := m.clients[id]
 	if ok {
+		// Read pattern under c.mu to avoid race with handleSetPattern.
+		c.mu.Lock()
+		pat := c.pattern
+		c.mu.Unlock()
+
 		// Unsubscribe from pattern if subscribed.
-		if c.pattern != "" && m.registry != nil {
-			if p := m.registry.Get(c.pattern); p != nil {
+		if pat != "" && m.registry != nil {
+			if p := m.registry.Get(pat); p != nil {
 				p.Unsubscribe(id)
 			}
 		}
+		c.closed.Store(true)
 		close(c.send)
 		delete(m.clients, id)
 	}

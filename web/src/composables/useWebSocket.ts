@@ -6,7 +6,7 @@ import { usePatternsStore } from '../stores/patterns'
 import { usePrefilterStore } from '../stores/prefilter'
 import type { WSMessage, ClientJoinedData, LogBulkData, StatusData, PatternChangedData } from '../types'
 
-export function useWebSocket(url: string) {
+export function useWebSocket(url: string | (() => string)) {
   const isConnected = ref(false)
   let ws: WebSocket | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -25,10 +25,12 @@ export function useWebSocket(url: string) {
     }
 
     connectionStore.status = 'connecting'
-    ws = new WebSocket(url)
+    const resolvedUrl = typeof url === 'function' ? url() : url
+    ws = new WebSocket(resolvedUrl)
 
     ws.onopen = () => {
       isConnected.value = true
+      connectionStore.status = 'connected'
       reconnectDelay = 1000
     }
 
@@ -89,11 +91,12 @@ export function useWebSocket(url: string) {
 
   function scheduleReconnect() {
     if (reconnectTimer) return
+    const jitter = Math.random() * 0.3 * reconnectDelay
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null
       reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY)
       connect()
-    }, reconnectDelay)
+    }, reconnectDelay + jitter)
   }
 
   function disconnect() {
@@ -140,6 +143,9 @@ export function useWebSocket(url: string) {
 
   onUnmounted(() => {
     disconnect()
+    connectionStore.registerControls(null, null)
+    labelsStore.registerSendFilter(null)
+    patternsStore.registerSelectPattern(null)
   })
 
   return {

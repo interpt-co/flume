@@ -68,6 +68,25 @@ func TestAuthCallbackServerError(t *testing.T) {
 	}
 }
 
+func TestAuthCallbackTokenQueryParam(t *testing.T) {
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer my-jwt" {
+			t.Errorf("expected Authorization 'Bearer my-jwt', got %q", got)
+		}
+		json.NewEncoder(w).Encode(authResponse{Allowed: true})
+	}))
+	defer authServer.Close()
+
+	ac := &AuthConfig{URL: authServer.URL, Timeout: 5_000_000_000}
+	// Simulate browser WS upgrade: no Authorization header, token in query param
+	fakeReq, _ := http.NewRequest("GET", "/ws?token=my-jwt&filter=ns:prod", nil)
+
+	allowed, reason := ac.Check(fakeReq, map[string]string{"ns": "prod"}, "all")
+	if !allowed {
+		t.Errorf("expected allowed with token query param, got denied: %s", reason)
+	}
+}
+
 func TestAuthCallbackNilConfig(t *testing.T) {
 	var ac *AuthConfig
 	fakeReq, _ := http.NewRequest("GET", "/ws", nil)

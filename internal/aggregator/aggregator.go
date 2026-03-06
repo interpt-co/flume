@@ -73,16 +73,28 @@ func (a *Aggregator) Run(ctx context.Context) error {
 	ingester := &ingesterAdapter{registry: registry}
 	grpcSrv := flumegrpc.NewServer(ingester, tracker)
 
+	grpcErrCh := make(chan error, 1)
 	go func() {
 		addr := fmt.Sprintf(":%d", a.cfg.GRPCPort)
 		if err := grpcSrv.Serve(addr); err != nil {
-			log.WithError(err).Error("gRPC server error")
+			grpcErrCh <- err
 		}
+		close(grpcErrCh)
 	}()
 	go func() {
 		<-ctx.Done()
 		grpcSrv.GracefulStop()
 	}()
+
+	// Give gRPC server a moment to bind; fail fast on startup errors.
+	select {
+	case err := <-grpcErrCh:
+		if err != nil {
+			return fmt.Errorf("gRPC server: %w", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		// Server is running.
+	}
 
 	// 3. Create pattern-aware ClientManager.
 	manager := server.NewClientManagerWithRegistry(registry, a.cfg.BulkWindowMS)
