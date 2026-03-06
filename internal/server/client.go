@@ -113,6 +113,19 @@ func (c *Client) subscribeToPattern(patternName string) {
 		ID:   c.id,
 		Ch:   c.send,
 		Done: make(chan struct{}),
+		Filter: func(msg models.LogMessage) bool {
+			c.mu.Lock()
+			st := c.status
+			filter := c.labelFilter
+			c.mu.Unlock()
+			if st == StatusStopped {
+				return false
+			}
+			if len(filter) > 0 {
+				return query.LabelMatcher(filter).Matches(msg)
+			}
+			return true
+		},
 	}
 	p.Subscribe(sub)
 	c.pattern = patternName
@@ -238,6 +251,19 @@ func (c *Client) handleSetPattern(patternName string) {
 		ID:   c.id,
 		Ch:   c.send,
 		Done: make(chan struct{}),
+		Filter: func(msg models.LogMessage) bool {
+			c.mu.Lock()
+			st := c.status
+			filter := c.labelFilter
+			c.mu.Unlock()
+			if st == StatusStopped {
+				return false
+			}
+			if len(filter) > 0 {
+				return query.LabelMatcher(filter).Matches(msg)
+			}
+			return true
+		},
 	}
 	p.Subscribe(sub)
 

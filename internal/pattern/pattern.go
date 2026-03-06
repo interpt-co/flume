@@ -10,9 +10,12 @@ import (
 
 // Subscriber receives messages from a pattern.
 type Subscriber struct {
-	ID   string
-	Ch   chan models.LogMessage
-	Done chan struct{}
+	ID     string
+	Ch     chan models.LogMessage
+	Done   chan struct{}
+	// Filter is called before sending; if it returns false the message is dropped.
+	// A nil Filter accepts all messages.
+	Filter func(models.LogMessage) bool
 }
 
 // Pattern holds per-pattern state: a ring buffer and subscriber fan-out.
@@ -43,6 +46,9 @@ func (p *Pattern) Ingest(msgs []models.LogMessage) {
 		atomic.AddUint64(&p.msgCount, 1)
 
 		for _, sub := range p.subscribers {
+			if sub.Filter != nil && !sub.Filter(msg) {
+				continue
+			}
 			select {
 			case sub.Ch <- msg:
 			default: // drop if subscriber is slow

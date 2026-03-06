@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { LogMessage } from '../types'
+import { useLabelsStore } from './labels'
 
 export const WINDOW_SIZE = 500
 const MAX_MESSAGES = 5000
@@ -23,21 +24,47 @@ export const useLogsStore = defineStore('logs', () => {
   )
 
   const filteredMessages = computed(() => {
-    if (!filter.value) return messages.value
+    const labelsStore = useLabelsStore()
+    const activeLabels = labelsStore.activeLabels
+    const hasLabelFilter = Object.keys(activeLabels).length > 0
+    const hasTextFilter = !!filter.value
 
-    if (filterMode.value === 'regex') {
-      try {
-        const re = new RegExp(filter.value, 'i')
-        return messages.value.filter((msg) => re.test(msg.content))
-      } catch {
-        return messages.value
+    if (!hasTextFilter && !hasLabelFilter) return messages.value
+
+    let result = messages.value
+
+    // Apply label/level filter client-side for already-displayed messages.
+    if (hasLabelFilter) {
+      result = result.filter((msg) => {
+        for (const [key, val] of Object.entries(activeLabels)) {
+          if (key === 'level') {
+            if (msg.level?.toLowerCase() !== val.toLowerCase()) return false
+          } else {
+            if (!msg.labels || msg.labels[key] !== val) return false
+          }
+        }
+        return true
+      })
+    }
+
+    // Apply text/regex filter.
+    if (hasTextFilter) {
+      if (filterMode.value === 'regex') {
+        try {
+          const re = new RegExp(filter.value, 'i')
+          result = result.filter((msg) => re.test(msg.content))
+        } catch {
+          // invalid regex, skip text filter
+        }
+      } else {
+        const term = filter.value.toLowerCase()
+        result = result.filter((msg) =>
+          msg.content.toLowerCase().includes(term),
+        )
       }
     }
 
-    const term = filter.value.toLowerCase()
-    return messages.value.filter((msg) =>
-      msg.content.toLowerCase().includes(term),
-    )
+    return result
   })
 
   function addMessages(msgs: LogMessage[]) {
