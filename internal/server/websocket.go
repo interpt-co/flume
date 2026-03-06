@@ -11,6 +11,7 @@ import (
 	"github.com/interpt-co/flume/internal/buffer"
 	"github.com/interpt-co/flume/internal/models"
 	"github.com/interpt-co/flume/internal/pattern"
+	"github.com/interpt-co/flume/internal/query"
 )
 
 // StatusInfo holds runtime status information.
@@ -72,6 +73,11 @@ func (m *ClientManager) HandleWS(w http.ResponseWriter, r *http.Request) {
 	id := uuid.New().String()
 	c := newClient(id, conn, m)
 
+	// Parse pre-filter from query params (immutable for the lifetime of the connection).
+	if filterStr := r.URL.Query().Get("filter"); filterStr != "" {
+		c.preFilter = map[string]string(query.ParseLabels(filterStr))
+	}
+
 	// Subscribe to pattern: from query param, or default to first available.
 	if m.registry != nil {
 		patternName := r.URL.Query().Get("pattern")
@@ -94,6 +100,7 @@ func (m *ClientManager) HandleWS(w http.ResponseWriter, r *http.Request) {
 	joined := clientJoinedData{
 		ClientID:   id,
 		BufferSize: m.bufferCap(),
+		PreFilters: c.preFilter,
 	}
 	if m.registry != nil {
 		joined.Patterns = m.registry.Names()

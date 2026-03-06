@@ -386,6 +386,40 @@ func TestLoadRangeEndpointDefaults(t *testing.T) {
 	}
 }
 
+func TestWebSocketPreFilter(t *testing.T) {
+	mgr := newTestManager(1000)
+	ts := newTestHTTPServer(t, mgr)
+	defer ts.Close()
+
+	// Connect with pre-filter.
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws?filter=ns:prod,app:web"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("failed to dial ws: %v", err)
+	}
+	defer conn.Close()
+
+	msg := readWSMessage(t, conn, 2*time.Second)
+	if msg.Type != "client_joined" {
+		t.Fatalf("expected client_joined, got %q", msg.Type)
+	}
+
+	var data clientJoinedData
+	if err := json.Unmarshal(msg.Data, &data); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if data.PreFilters == nil {
+		t.Fatal("expected pre_filters in client_joined")
+	}
+	if data.PreFilters["ns"] != "prod" {
+		t.Errorf("expected pre_filters[ns]=prod, got %q", data.PreFilters["ns"])
+	}
+	if data.PreFilters["app"] != "web" {
+		t.Errorf("expected pre_filters[app]=web, got %q", data.PreFilters["app"])
+	}
+}
+
 func TestLoadRange(t *testing.T) {
 	mgr := newTestManager(1000)
 	ts := newTestHTTPServer(t, mgr)
