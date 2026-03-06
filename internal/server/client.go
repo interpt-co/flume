@@ -87,7 +87,8 @@ type Client struct {
 	send        chan models.LogMessage
 	status      string
 	pattern     string            // current pattern subscription (aggregator mode)
-	labelFilter map[string]string // nil = match all
+	labelFilter map[string]string // nil = match all (user-changeable)
+	preFilter   map[string]string // nil = no pre-filter (immutable, set on connect)
 	mu          sync.Mutex        // guards status, pattern, and labelFilter
 	writeMu     sync.Mutex        // guards WebSocket writes
 }
